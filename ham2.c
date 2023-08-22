@@ -29,35 +29,35 @@ u32 bitfield_extract(u32 value, u32 base_index, u32 width) {
 #define SIGNBIT_POS 0
 #define SIGNBIT_NEG 1
 
-int sgn2int(u8 sgn) { return ((int)sgn) * -2 + 1; }
+int signbit2sign(u8 signbit) { return ((int)signbit) * -2 + 1; }
 
-#define IAX_X 0
-#define IAX_Y 1
-#define IAX_Z 2
+#define AXIS_X 0
+#define AXIS_Y 1
+#define AXIS_Z 2
 
 u8 iax2ax(u8 iax) { return 1 << iax; }
 
 u8 idir_make(u8 sgn, u8 iax) { return iax * 2 + sgn; }
 
-#define IDIR_PX idir_make(SIGNBIT_POS, IAX_X)
-#define IDIR_NX idir_make(SIGNBIT_NEG, IAX_X)
-#define IDIR_PY idir_make(SIGNBIT_POS, IAX_Y)
-#define IDIR_NY idir_make(SIGNBIT_NEG, IAX_Y)
-#define IDIR_PZ idir_make(SIGNBIT_POS, IAX_Z)
-#define IDIR_NZ idir_make(SIGNBIT_NEG, IAX_Z)
+#define IDIR_PX idir_make(SIGNBIT_POS, AXIS_X)
+#define IDIR_NX idir_make(SIGNBIT_NEG, AXIS_X)
+#define IDIR_PY idir_make(SIGNBIT_POS, AXIS_Y)
+#define IDIR_NY idir_make(SIGNBIT_NEG, AXIS_Y)
+#define IDIR_PZ idir_make(SIGNBIT_POS, AXIS_Z)
+#define IDIR_NZ idir_make(SIGNBIT_NEG, AXIS_Z)
 #define IDIR_INVALID (IDIR_NZ + 1)
 
-u8 idir2dir(u8 idir) { return 1 << idir; }
+u8 idir2dirmask(u8 idir) { return 1 << idir; }
 u8 idir_inv(u8 idir) { return (idir & ~1) | !(idir & 1); }
 u8 idir_ax(u8 idir) { return idir >> 1; }
-u8 idir_sgn(u8 idir) { return idir & 1; }
+u8 idir_signbit(u8 idir) { return idir & 1; }
 
-#define DIR_PX idir2dir(IDIR_PX)
-#define DIR_NX idir2dir(IDIR_NX)
-#define DIR_PY idir2dir(IDIR_PY)
-#define DIR_NY idir2dir(IDIR_NY)
-#define DIR_PZ idir2dir(IDIR_PZ)
-#define DIR_NZ idir2dir(IDIR_NZ)
+#define DIR_PX idir2dirmask(IDIR_PX)
+#define DIR_NX idir2dirmask(IDIR_NX)
+#define DIR_PY idir2dirmask(IDIR_PY)
+#define DIR_NY idir2dirmask(IDIR_NY)
+#define DIR_PZ idir2dirmask(IDIR_PZ)
+#define DIR_NZ idir2dirmask(IDIR_NZ)
 
 typedef struct edge {
   u32 from;
@@ -210,29 +210,30 @@ u32 gspan() { return 1 << g_bits; }
 u32 bspan() { return 1 << b_bits; }
 
 u32 sidx_add_xy(u32 sidx, u8 idir) {
-  int sgn = sgn2int(idir_sgn(idir));
-  return xy2sidx(sidx2x(sidx) + (idir == IDIR_NX || idir == IDIR_PX) * sgn * 2,
-                 sidx2y(sidx) + (idir == IDIR_NY || idir == IDIR_PY) * sgn * 2);
+  int sign = signbit2sign(idir_signbit(idir));
+  return xy2sidx(sidx2x(sidx) + (idir == IDIR_NX || idir == IDIR_PX) * sign * 2,
+                 sidx2y(sidx) +
+                     (idir == IDIR_NY || idir == IDIR_PY) * sign * 2);
 }
 u32 sidx_add_rgb(u32 sidx, u8 idir) {
-  int sgn = sgn2int(idir_sgn(idir));
-  return rgb2sidx(sidx2r(sidx) + (idir == IDIR_NX || idir == IDIR_PX) * sgn * 2,
-                  sidx2g(sidx) + (idir == IDIR_NY || idir == IDIR_PY) * sgn * 2,
-                  sidx2b(sidx) +
-                      (idir == IDIR_NZ || idir == IDIR_PZ) * sgn * 2);
+  int sign = signbit2sign(idir_signbit(idir));
+  return rgb2sidx(
+      sidx2r(sidx) + (idir == IDIR_NX || idir == IDIR_PX) * sign * 2,
+      sidx2g(sidx) + (idir == IDIR_NY || idir == IDIR_PY) * sign * 2,
+      sidx2b(sidx) + (idir == IDIR_NZ || idir == IDIR_PZ) * sign * 2);
 }
 
 u32 idx_add_xy(u32 idx, u8 idir) {
   assert(idir < 6);
-  int sgn = sgn2int(idir_sgn(idir));
-  return xy2idx(idx2x(idx) + (idir == IDIR_NX || idir == IDIR_PX) * sgn,
-                idx2y(idx) + (idir == IDIR_NY || idir == IDIR_PY) * sgn);
+  int sign = signbit2sign(idir_signbit(idir));
+  return xy2idx(idx2x(idx) + (idir == IDIR_NX || idir == IDIR_PX) * sign,
+                idx2y(idx) + (idir == IDIR_NY || idir == IDIR_PY) * sign);
 }
 u32 idx_add_rgb(u32 idx, u8 idir) {
-  int sgn = sgn2int(idir_sgn(idir));
-  return rgb2idx(idx2r(idx) + (idir == IDIR_NX || idir == IDIR_PX) * sgn,
-                 idx2g(idx) + (idir == IDIR_NY || idir == IDIR_PY) * sgn,
-                 idx2b(idx) + (idir == IDIR_NZ || idir == IDIR_PZ) * sgn);
+  int sign = signbit2sign(idir_signbit(idir));
+  return rgb2idx(idx2r(idx) + (idir == IDIR_NX || idir == IDIR_PX) * sign,
+                 idx2g(idx) + (idir == IDIR_NY || idir == IDIR_PY) * sign,
+                 idx2b(idx) + (idir == IDIR_NZ || idir == IDIR_PZ) * sign);
 }
 
 edge make_edge(u32 from, u32 to) {
@@ -378,12 +379,12 @@ void check_mst(u8 *dir_map, u32 num_nodes, u32 start_idx, int dims) {
     found[top] = 1;
     if (dims == 2) {
       for (u32 i = 0; i < 4; i++) {
-        if (dir & idir2dir(i))
+        if (dir & idir2dirmask(i))
           stk[stk_ptr++] = sidx_add_xy(top, i);
       }
     } else if (dims == 3) {
       for (u32 i = 0; i < 6; i++) {
-        if (dir & idir2dir(i))
+        if (dir & idir2dirmask(i))
           stk[stk_ptr++] = sidx_add_rgb(top, i);
       }
     }
@@ -452,7 +453,7 @@ void grayinate_2(u8 child_set, u8 dir_out, u8 *out_dirs, u8 *out_gray) {
     out_dirs[dir_to_idx[dir_out]] = dir_out;
   }
   for (i = 0; i < 4; i++) {
-    if (child_set & idir2dir(i))
+    if (child_set & idir2dirmask(i))
       out_dirs[dir_to_idx[i]] = i;
     out_gray[i] = gray[i];
   }
@@ -543,7 +544,7 @@ void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
   }
   for (i = 0; i < 6 && child_set; i++) {
     u8 current_idir = idir_argmin(axis_count);
-    u8 current_dir = idir2dir(current_idir);
+    u8 current_dir = idir2dirmask(current_idir);
     u64 dir_mask = 3 << (2 * current_idir), dir_mask_inv = ~dir_mask;
     if (current_dir & child_set) {
       for (j = 0; j < 8; j++) {
@@ -573,7 +574,7 @@ void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
     out_gray[i] = gray[i];
     assert(gray[i] < 8 && dirs[i] < 6);
   }
-  u8 check = orig_child_set | ((dir_out < 6) ? idir2dir(dir_out) : 0);
+  u8 check = orig_child_set | ((dir_out < 6) ? idir2dirmask(dir_out) : 0);
   assert(is_gray(out_gray));
   for (j = 0; j < 8; j++) {
     u8 d = out_dirs[j];
@@ -615,7 +616,7 @@ u8 *resolve_edges_2(u32 num_nodes, u8 *dir_map, u32 start_idx) {
       out[out_idx] = dirs[i];
     }
     for (i = 0; i < 4; i++) {
-      if (dir & idir2dir(i)) {
+      if (dir & idir2dirmask(i)) {
         dir_out_stk[stk_ptr] = idir_inv(i);
         stk[stk_ptr++] = sidx_add_xy(top, i);
       }
