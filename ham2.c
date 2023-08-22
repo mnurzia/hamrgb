@@ -101,6 +101,7 @@ edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *edge_weights) {
   u32 tree_num_edges = 0;
   u32 tree_max_edges = num_nodes - 1;
   while (tree_num_edges != tree_max_edges) {
+    assert(pop_idx);
     edge next_edge = edges[--pop_idx];
     assert(valid_edge(next_edge));
     u32 root_a = dsu_find(dsu, next_edge.from);
@@ -226,6 +227,7 @@ edge make_edge(u32 from, u32 to) {
 edge *make_screen_edges(u32 w, u32 h, u32 *out_num_edges) {
   assert(!(w % 2) && !(h % 2));
   edge *out_edges = malloc(sizeof(edge) * ((w / 2) * (h / 2) * 2));
+  assert(out_edges);
   u32 x, y;
   *out_num_edges = 0;
   for (y = 0; y < h; y += 2) {
@@ -245,6 +247,7 @@ edge *make_screen_edges(u32 w, u32 h, u32 *out_num_edges) {
 edge *make_cube_edges(u32 w, u32 h, u32 d, u32 *out_num_edges) {
   assert(!(w % 2) && !(h % 2) && !(d % 2));
   edge *out_edges = malloc(sizeof(edge) * ((w / 2) * (h / 2) * (d / 2) * 3));
+  assert(out_edges);
   u32 r, g, b;
   *out_num_edges = 0;
   for (b = 0; b < d; b += 2) {
@@ -268,6 +271,7 @@ edge *make_cube_edges(u32 w, u32 h, u32 d, u32 *out_num_edges) {
 
 u8 *map_edges(u32 num_nodes, u32 num_edges, edge *edges, int dims) {
   u8 *dir_map = malloc(sizeof(u8) * num_nodes);
+  assert(dir_map);
   memset(dir_map, 0, sizeof(u8) * num_nodes);
   while (num_edges--) {
     edge e = edges[num_edges];
@@ -297,6 +301,7 @@ u8 *map_edges(u32 num_nodes, u32 num_edges, edge *edges, int dims) {
 u8 *reorient_edges(u32 num_nodes, u8 *dir_map, u32 start_idx, int dims) {
   u32 *stk = malloc(sizeof(u32) * num_nodes);
   u8 *undir_map = malloc(sizeof(u8) * num_nodes);
+  assert(stk && undir_map);
   memset(undir_map, 0, sizeof(u8) * num_nodes);
   u32 stk_ptr = 0;
   stk[stk_ptr++] = start_idx;
@@ -343,6 +348,7 @@ int valid_dir_set(u8 dir_set) { return dir_set < (1 << 6); }
 void check_mst(u8 *dir_map, u32 num_nodes, u32 start_idx, int dims) {
   u32 *stk = malloc(sizeof(u32) * num_nodes);
   u8 *found = malloc(sizeof(u8) * num_nodes);
+  assert(stk && found);
   memset(found, 0, sizeof(u8) * num_nodes);
   u32 stk_ptr = 0;
   stk[stk_ptr++] = start_idx;
@@ -585,6 +591,7 @@ u8 *resolve_edges_2(u32 num_nodes, u8 *dir_map, u32 start_idx) {
   u32 *stk = malloc(sizeof(u32) * num_nodes);
   u8 *dir_out_stk = malloc(sizeof(u8) * num_nodes);
   u8 *out = malloc(sizeof(u8) * num_nodes * 4);
+  assert(stk && dir_out_stk && out);
   memset(out, 6, sizeof(u8) * num_nodes * 4);
   u32 stk_ptr = 0;
   dir_out_stk[stk_ptr] = 6;
@@ -621,6 +628,7 @@ u8 *resolve_edges_3(u32 num_nodes, u8 *dir_map, u32 start_idx) {
   u8 *start_point_stk = malloc(sizeof(u8) * num_nodes);
   u8 *end_point_stk = malloc(sizeof(u8) * num_nodes);
   u8 *out = malloc(sizeof(u8) * num_nodes * 8);
+  assert(stk && dir_out_stk && start_point_stk && end_point_stk && out);
   memset(out, 7, sizeof(u8) * num_nodes * 8);
   u32 stk_ptr = 0;
   // u32 idxidx = 0;
@@ -680,6 +688,7 @@ uint32_t triple32(uint32_t x) {
 
 u32 *make_edge_weights(u32 num_edges) {
   u32 *out = malloc(sizeof(u32) * num_edges);
+  assert(out);
   for (u32 i = 0; i < num_edges; i++) {
     out[i] = triple32(i);
   }
@@ -693,6 +702,7 @@ void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
   FILE *f = fopen("out.pbm", "w");
   u32 *pix = malloc(sizeof(u32) * xspan() * yspan());
   u8 *out_f = malloc(sizeof(u8) * xspan() * yspan() * 3);
+  assert(pix && out_f);
   u32 out_f_ptr = 0;
   fprintf(f, "P6\n%i %i\n255\n", xspan(), yspan());
   do {
@@ -712,6 +722,8 @@ void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
   }
   fwrite(out_f, out_f_ptr, 1, f);
   fclose(f);
+  free(out_f);
+  free(pix);
 }
 
 int main(int argc, const char *const *argv) {
