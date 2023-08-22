@@ -16,6 +16,49 @@ u32 b_bits = 8;
 u32 x_bits = 12;
 u32 y_bits = 12;
 
+// compose bitfield
+u32 bitfield_compress(u32 value, u32 base_index, u32 width) {
+  return (value & ((1 << width) - 1)) << base_index;
+}
+
+// decompose bitfield
+u32 bitfield_extract(u32 value, u32 base_index, u32 width) {
+  return (value >> base_index) & ((1 << width) - 1);
+}
+
+#define SIGNBIT_POS 0
+#define SIGNBIT_NEG 1
+
+int sgn2int(u8 sgn) { return ((int)sgn) * -2 + 1; }
+
+#define IAX_X 0
+#define IAX_Y 1
+#define IAX_Z 2
+
+u8 iax2ax(u8 iax) { return 1 << iax; }
+
+u8 idir_make(u8 sgn, u8 iax) { return iax * 2 + sgn; }
+
+#define IDIR_PX idir_make(SIGNBIT_POS, IAX_X)
+#define IDIR_NX idir_make(SIGNBIT_NEG, IAX_X)
+#define IDIR_PY idir_make(SIGNBIT_POS, IAX_Y)
+#define IDIR_NY idir_make(SIGNBIT_NEG, IAX_Y)
+#define IDIR_PZ idir_make(SIGNBIT_POS, IAX_Z)
+#define IDIR_NZ idir_make(SIGNBIT_NEG, IAX_Z)
+#define IDIR_INVALID (IDIR_NZ + 1)
+
+u8 idir2dir(u8 idir) { return 1 << idir; }
+u8 idir_inv(u8 idir) { return (idir & ~1) | !(idir & 1); }
+u8 idir_ax(u8 idir) { return idir >> 1; }
+u8 idir_sgn(u8 idir) { return idir & 1; }
+
+#define DIR_PX idir2dir(IDIR_PX)
+#define DIR_NX idir2dir(IDIR_NX)
+#define DIR_PY idir2dir(IDIR_PY)
+#define DIR_NY idir2dir(IDIR_NY)
+#define DIR_PZ idir2dir(IDIR_PZ)
+#define DIR_NZ idir2dir(IDIR_NZ)
+
 typedef struct edge {
   u32 from;
   u32 to;
@@ -118,86 +161,61 @@ edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *edge_weights) {
   return out_edges;
 }
 
-u32 compress(u32 v, u32 idx, u32 w) {
-  (void)w;
-  return v << idx;
-}
-
-u32 extract(u32 v, u32 idx, u32 w) { return (v >> idx) & ((1 << w) - 1); }
-
-#define IDIR_PX 0
-#define IDIR_NX 1
-#define IDIR_PY 2
-#define IDIR_NY 3
-#define IDIR_PZ 4
-#define IDIR_NZ 5
-
-u8 idir_inv(u8 idir) { return (idir & ~1) | !(idir & 1); }
-u8 make_idir(u8 sgn /* 0 = +, 1 = - */, u8 ax_idx /* 0 = x, 1 = y, 2 = z */) {
-  return ax_idx * 2 + sgn;
-}
-
-int idir_sgn(u8 idir) { return -(((idir & 1) * 2) - 1); }
-
-u8 idir2dir(u8 idir) { return 1 << idir; }
-
 const char *idir2str(u8 idir) {
   return (const char *[]){"+x", "-x", "+y", "-y", "+z", "-z"}[idir];
 }
 
-#define DIR_PX (1 << IDIR_PX)
-#define DIR_NX (1 << IDIR_NX)
-#define DIR_PY (1 << IDIR_PY)
-#define DIR_NY (1 << IDIR_NY)
-#define DIR_PZ (1 << IDIR_PZ)
-#define DIR_NZ (1 << IDIR_NZ)
-
 u32 xy2sidx(u32 x, u32 y) {
-  return compress(x >> 1, 0, x_bits - 1) |
-         compress(y >> 1, x_bits - 1, y_bits - 1);
+  return bitfield_compress(x >> 1, 0, x_bits - 1) |
+         bitfield_compress(y >> 1, x_bits - 1, y_bits - 1);
 }
-u32 sidx2x(u32 sidx) { return extract(sidx, 0, x_bits - 1) << 1; }
-u32 sidx2y(u32 sidx) { return extract(sidx, x_bits - 1, y_bits - 1) << 1; }
+u32 sidx2x(u32 sidx) { return bitfield_extract(sidx, 0, x_bits - 1) << 1; }
+u32 sidx2y(u32 sidx) {
+  return bitfield_extract(sidx, x_bits - 1, y_bits - 1) << 1;
+}
 
 u32 xy2idx(u32 x, u32 y) {
-  return compress(x, 0, x_bits) | compress(y, x_bits, y_bits);
+  return bitfield_compress(x, 0, x_bits) | bitfield_compress(y, x_bits, y_bits);
 }
-u32 idx2x(u32 idx) { return extract(idx, 0, x_bits); }
-u32 idx2y(u32 idx) { return extract(idx, x_bits, y_bits); }
+u32 idx2x(u32 idx) { return bitfield_extract(idx, 0, x_bits); }
+u32 idx2y(u32 idx) { return bitfield_extract(idx, x_bits, y_bits); }
 
 u32 xspan() { return 1 << x_bits; }
 u32 yspan() { return 1 << y_bits; }
 
 u32 rgb2sidx(u32 r, u32 g, u32 b) {
-  return compress(r >> 1, 0, r_bits - 1) |
-         compress(g >> 1, r_bits - 1, g_bits - 1) |
-         compress(b >> 1, (r_bits - 1 + g_bits - 1), b_bits - 1);
+  return bitfield_compress(r >> 1, 0, r_bits - 1) |
+         bitfield_compress(g >> 1, r_bits - 1, g_bits - 1) |
+         bitfield_compress(b >> 1, (r_bits - 1 + g_bits - 1), b_bits - 1);
 }
-u32 sidx2r(u32 sidx) { return extract(sidx, 0, r_bits - 1) << 1; }
-u32 sidx2g(u32 sidx) { return extract(sidx, r_bits - 1, g_bits - 1) << 1; }
+u32 sidx2r(u32 sidx) { return bitfield_extract(sidx, 0, r_bits - 1) << 1; }
+u32 sidx2g(u32 sidx) {
+  return bitfield_extract(sidx, r_bits - 1, g_bits - 1) << 1;
+}
 u32 sidx2b(u32 sidx) {
-  return extract(sidx, r_bits - 1 + g_bits - 1, b_bits - 1) << 1;
+  return bitfield_extract(sidx, r_bits - 1 + g_bits - 1, b_bits - 1) << 1;
 }
 
 u32 rgb2idx(u32 r, u32 g, u32 b) {
-  return compress(r, 0, r_bits) | compress(g, r_bits, g_bits) |
-         compress(b, r_bits + g_bits, b_bits);
+  return bitfield_compress(r, 0, r_bits) |
+         bitfield_compress(g, r_bits, g_bits) |
+         bitfield_compress(b, r_bits + g_bits, b_bits);
 }
-u32 idx2r(u32 idx) { return extract(idx, 0, r_bits); }
-u32 idx2g(u32 idx) { return extract(idx, r_bits, g_bits); }
-u32 idx2b(u32 idx) { return extract(idx, r_bits + g_bits, b_bits); }
+u32 idx2r(u32 idx) { return bitfield_extract(idx, 0, r_bits); }
+u32 idx2g(u32 idx) { return bitfield_extract(idx, r_bits, g_bits); }
+u32 idx2b(u32 idx) { return bitfield_extract(idx, r_bits + g_bits, b_bits); }
 
 u32 rspan() { return 1 << r_bits; }
 u32 gspan() { return 1 << g_bits; }
 u32 bspan() { return 1 << b_bits; }
 
 u32 sidx_add_xy(u32 sidx, u8 idir) {
-  int sgn = idir_sgn(idir);
+  int sgn = sgn2int(idir_sgn(idir));
   return xy2sidx(sidx2x(sidx) + (idir == IDIR_NX || idir == IDIR_PX) * sgn * 2,
                  sidx2y(sidx) + (idir == IDIR_NY || idir == IDIR_PY) * sgn * 2);
 }
 u32 sidx_add_rgb(u32 sidx, u8 idir) {
-  int sgn = idir_sgn(idir);
+  int sgn = sgn2int(idir_sgn(idir));
   return rgb2sidx(sidx2r(sidx) + (idir == IDIR_NX || idir == IDIR_PX) * sgn * 2,
                   sidx2g(sidx) + (idir == IDIR_NY || idir == IDIR_PY) * sgn * 2,
                   sidx2b(sidx) +
@@ -206,12 +224,12 @@ u32 sidx_add_rgb(u32 sidx, u8 idir) {
 
 u32 idx_add_xy(u32 idx, u8 idir) {
   assert(idir < 6);
-  int sgn = idir_sgn(idir);
+  int sgn = sgn2int(idir_sgn(idir));
   return xy2idx(idx2x(idx) + (idir == IDIR_NX || idir == IDIR_PX) * sgn,
                 idx2y(idx) + (idir == IDIR_NY || idir == IDIR_PY) * sgn);
 }
 u32 idx_add_rgb(u32 idx, u8 idir) {
-  int sgn = idir_sgn(idir);
+  int sgn = sgn2int(idir_sgn(idir));
   return rgb2idx(idx2r(idx) + (idir == IDIR_NX || idir == IDIR_PX) * sgn,
                  idx2g(idx) + (idir == IDIR_NY || idir == IDIR_PY) * sgn,
                  idx2b(idx) + (idir == IDIR_NZ || idir == IDIR_PZ) * sgn);
@@ -377,20 +395,6 @@ void check_mst(u8 *dir_map, u32 num_nodes, u32 start_idx, int dims) {
   free(found);
 }
 
-typedef struct cube_spec {
-  u8 points[8];
-  u8 axis_compat[8];
-  u8 axis_count[6];
-} cube_spec;
-
-u8 cube_point(int x, int y, int z) {
-  return (u8)(compress(x, 0, 1) | compress(y, 1, 1) | compress(z, 2, 1));
-}
-
-int cube_x(u8 point) { return extract(point, 0, 1); }
-int cube_y(u8 point) { return extract(point, 1, 1); }
-int cube_z(u8 point) { return extract(point, 2, 1); }
-
 void gray_invert(u8 *g, u8 mask) {
   for (int i = 0; i < 8; i++)
     g[i] = ((~g[i] & mask) | (g[i] & ~mask)) & 7;
@@ -522,7 +526,7 @@ void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
     u8 dir = dirs[i], point = gray[i], dir_inv = idir_inv(dir);
     for (axis = 0; axis < 3; axis++) {
       u8 sgn = !((1 << axis) & point);
-      u8 compat_dir = make_idir(sgn, axis);
+      u8 compat_dir = idir_make(sgn, axis);
       if (compat_dir != dir_inv)
         dir_axis_set[i] |= 1 << (2 * compat_dir);
     }
@@ -574,7 +578,7 @@ void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
   for (j = 0; j < 8; j++) {
     u8 d = out_dirs[j];
     for (axis = 0; axis < 3; axis++) {
-      if (d == make_idir(!(gray[j] & (1 << axis)), axis)) {
+      if (d == idir_make(!(gray[j] & (1 << axis)), axis)) {
         assert((gray[(j + 1) % 8] ^ gray[j]) != (1 << axis));
         assert(check & (1 << d));
         check ^= 1 << d;
@@ -727,18 +731,6 @@ void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
 }
 
 int main(int argc, const char *const *argv) {
-  assert(idir_sgn(IDIR_NX) == -1);
-  assert(idir_sgn(IDIR_PX) == 1);
-  assert(idir_sgn(IDIR_NY) == -1);
-  assert(idir_sgn(IDIR_PY) == 1);
-  assert(idir_sgn(IDIR_NZ) == -1);
-  assert(idir_sgn(IDIR_PZ) == 1);
-  assert(idir_inv(IDIR_NX) == IDIR_PX);
-  assert(idir_inv(IDIR_PX) == IDIR_NX);
-  assert(idir_inv(IDIR_NY) == IDIR_PY);
-  assert(idir_inv(IDIR_PY) == IDIR_NY);
-  assert(idir_inv(IDIR_NZ) == IDIR_PZ);
-  assert(idir_inv(IDIR_PZ) == IDIR_NZ);
   u32 num_screen_edges, num_cube_edges;
   u32 num_screen_nodes = xspan() / 2 * yspan() / 2;
   u32 num_cube_nodes = rspan() / 2 * gspan() / 2 * bspan() / 2;
