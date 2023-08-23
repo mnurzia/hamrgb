@@ -29,12 +29,11 @@ u32 x_span() { return 1 << x_bits; }
 u32 y_span() { return 1 << y_bits; }
 
 // compose bitfield
-u32 bitfield_compress(u32 value, u32 base_index, u32 width) {
+u32 bf_compress(u32 value, u32 base_index, u32 width) {
   return (value & ((1 << width) - 1)) << base_index;
 }
-
 // decompose bitfield
-u32 bitfield_extract(u32 value, u32 base_index, u32 width) {
+u32 bf_extract(u32 value, u32 base_index, u32 width) {
   return (value >> base_index) & ((1 << width) - 1);
 }
 
@@ -42,7 +41,6 @@ u32 bitfield_extract(u32 value, u32 base_index, u32 width) {
 typedef u8 sign_flag;
 #define SIGN_FLAG_POS 0
 #define SIGN_FLAG_NEG 1
-
 // convert sign bit [0 = positive, 1 = negative] to 1 or -1, respectively
 int sign_flag_to_int(sign_flag sf) { return ((int)sf) * -2 + 1; }
 
@@ -57,7 +55,6 @@ typedef u8 axis_flag;
 #define AXIS_FLAG_X axis_to_axis_flag(AXIS_X)
 #define AXIS_FLAG_Y axis_to_axis_flag(AXIS_Y)
 #define AXIS_FLAG_Z axis_to_axis_flag(AXIS_Z)
-
 // convert axis to an axis flag (bit index)
 axis_flag axis_to_axis_flag(axis ax) { return 1 << ax; }
 
@@ -92,120 +89,110 @@ typedef u8 dir_flag;
 #define DIR_FLAG_NY dir_to_dir_flag(DIR_NY)
 #define DIR_FLAG_PZ dir_to_dir_flag(DIR_PZ)
 #define DIR_FLAG_NZ dir_to_dir_flag(DIR_NZ)
-
 // convert dir to dir bitset
 dir_flag dir_to_dir_flag(dir d) { return 1 << d; }
 
-// half-point on the xy square
-typedef u32 sq_hpoint;
-
-// make square half-point from x and y coordinates
-sq_hpoint sq_hpoint_make(u32 x, u32 y) {
-  return bitfield_compress(x >> 1, 0, x_bits - 1) |
-         bitfield_compress(y >> 1, x_bits - 1, y_bits - 1);
-}
-// get x coordinate of half-point
-u32 sq_hpoint_x(sq_hpoint pt) {
-  return bitfield_extract(pt, 0, x_bits - 1) << 1;
-}
-// get y coordinate of half-point
-u32 sq_hpoint_y(sq_hpoint pt) {
-  return bitfield_extract(pt, x_bits - 1, y_bits - 1) << 1;
-}
-
 // point on the xy square
 typedef u32 sq_point;
-// make square point from x and y coordinates
-sq_point sq_point_make(sq_point x, sq_point y) {
-  return bitfield_compress(x, 0, x_bits) | bitfield_compress(y, x_bits, y_bits);
-}
-// get x coordinate of point
-u32 sq_point_x(sq_point idx) { return bitfield_extract(idx, 0, x_bits); }
-// get y coordinate of point
-u32 sq_point_y(sq_point idx) { return bitfield_extract(idx, x_bits, y_bits); }
-
-// half-point on the rgb cube
-typedef u32 cb_hpoint;
-// make cube half-point from r, g, and b coordinates
-cb_hpoint cb_hpoint_make(u32 r, u32 g, u32 b) {
-  return bitfield_compress(r >> 1, 0, r_bits - 1) |
-         bitfield_compress(g >> 1, r_bits - 1, g_bits - 1) |
-         bitfield_compress(b >> 1, (r_bits - 1 + g_bits - 1), b_bits - 1);
-}
-// get r coordinate of half point
-u32 cb_hpoint_r(cb_hpoint sidx) {
-  return bitfield_extract(sidx, 0, r_bits - 1) << 1;
-}
-// get g coordinate of half point
-u32 cb_hpoint_g(cb_hpoint sidx) {
-  return bitfield_extract(sidx, r_bits - 1, g_bits - 1) << 1;
-}
-// get b coordinate of half point
-u32 cb_hpoint_b(cb_hpoint sidx) {
-  return bitfield_extract(sidx, r_bits - 1 + g_bits - 1, b_bits - 1) << 1;
-}
-
 // point on the rgb cube
 typedef u32 cb_point;
+// half-point on the xy square
+typedef u32 sq_hpoint;
+// half-point on the rgb cube
+typedef u32 cb_hpoint;
+
+// make square point from x and y coordinates
+sq_point sq_point_make(sq_point x, sq_point y) {
+  return bf_compress(x, 0, x_bits) | bf_compress(y, x_bits, y_bits);
+}
+// make square half point from x and y coordinates
+sq_hpoint sq_hpoint_make(u32 x, u32 y) {
+  return bf_compress(x >> 1, 0, x_bits - 1) |
+         bf_compress(y >> 1, x_bits - 1, y_bits - 1);
+}
+
+// get x coordinate of square point
+u32 sq_point_x(sq_point idx) { return bf_extract(idx, 0, x_bits); }
+// get x coordinate of square half point
+u32 sq_hpoint_x(sq_hpoint pt) { return bf_extract(pt, 0, x_bits - 1) << 1; }
+
+// get y coordinate of square point
+u32 sq_point_y(sq_point idx) { return bf_extract(idx, x_bits, y_bits); }
+// get y coordinate of square half point
+u32 sq_hpoint_y(sq_hpoint pt) {
+  return bf_extract(pt, x_bits - 1, y_bits - 1) << 1;
+}
+// add direction to square point
+u32 sq_point_add_dir(sq_point pt, dir d) {
+  int sign = sign_flag_to_int(dir_sign_flag(d));
+  return sq_point_make(sq_point_x(pt) + (dir_axis(d) == AXIS_X) * sign,
+                       sq_point_y(pt) + (dir_axis(d) == AXIS_Y) * sign);
+}
+// add direction to square half point
+sq_hpoint sq_hpoint_add_dir(sq_hpoint pt, dir d) {
+  int sign = sign_flag_to_int(dir_sign_flag(d));
+  return sq_hpoint_make(sq_hpoint_x(pt) + (dir_axis(d) == AXIS_X) * sign * 2,
+                        sq_hpoint_y(pt) + (dir_axis(d) == AXIS_Y) * sign * 2);
+}
 
 // make cube point from r, g, and b coordinates
 cb_point cb_point_make(u32 r, u32 g, u32 b) {
-  return bitfield_compress(r, 0, r_bits) |
-         bitfield_compress(g, r_bits, g_bits) |
-         bitfield_compress(b, r_bits + g_bits, b_bits);
+  return bf_compress(r, 0, r_bits) | bf_compress(g, r_bits, g_bits) |
+         bf_compress(b, r_bits + g_bits, b_bits);
 }
+// make cube half point from r, g, and b coordinates
+cb_hpoint cb_hpoint_make(u32 r, u32 g, u32 b) {
+  return bf_compress(r >> 1, 0, r_bits - 1) |
+         bf_compress(g >> 1, r_bits - 1, g_bits - 1) |
+         bf_compress(b >> 1, (r_bits - 1 + g_bits - 1), b_bits - 1);
+}
+
 // get r coordinate of cube point
-u32 cb_point_r(cb_point pt) { return bitfield_extract(pt, 0, r_bits); }
+u32 cb_point_r(cb_point pt) { return bf_extract(pt, 0, r_bits); }
+// get r coordinate of cube half point
+u32 cb_hpoint_r(cb_hpoint sidx) { return bf_extract(sidx, 0, r_bits - 1) << 1; }
 // get g coordinate of cube point
-u32 cb_point_g(cb_point pt) { return bitfield_extract(pt, r_bits, g_bits); }
+u32 cb_point_g(cb_point pt) { return bf_extract(pt, r_bits, g_bits); }
+// get g coordinate of cube half point
+u32 cb_hpoint_g(cb_hpoint sidx) {
+  return bf_extract(sidx, r_bits - 1, g_bits - 1) << 1;
+}
 // get b coordinate of cube point
-u32 cb_point_b(cb_point pt) {
-  return bitfield_extract(pt, r_bits + g_bits, b_bits);
+u32 cb_point_b(cb_point pt) { return bf_extract(pt, r_bits + g_bits, b_bits); }
+// get b coordinate of cube half point
+u32 cb_hpoint_b(cb_hpoint sidx) {
+  return bf_extract(sidx, r_bits - 1 + g_bits - 1, b_bits - 1) << 1;
+}
+// add direction to cube point
+u32 cb_point_add_dir(cb_point pt, dir d) {
+  int sign = sign_flag_to_int(dir_sign_flag(d));
+  return cb_point_make(cb_point_r(pt) + (dir_axis(d) == AXIS_X) * sign,
+                       cb_point_g(pt) + (dir_axis(d) == AXIS_Y) * sign,
+                       cb_point_b(pt) + (dir_axis(d) == AXIS_Z) * sign);
+}
+// add direction to cube half point
+u32 cb_hpoint_add_dir(cb_hpoint pt, dir d) {
+  int sign = sign_flag_to_int(dir_sign_flag(d));
+  return cb_hpoint_make(cb_hpoint_r(pt) + (dir_axis(d) == AXIS_X) * sign * 2,
+                        cb_hpoint_g(pt) + (dir_axis(d) == AXIS_Y) * sign * 2,
+                        cb_hpoint_b(pt) + (dir_axis(d) == AXIS_Z) * sign * 2);
 }
 
-u32 half_idx_add_dir_2(u32 sidx, u8 dir) {
-  int sign = sign_flag_to_int(dir_sign_flag(dir));
-  return sq_hpoint_make(
-      sq_hpoint_x(sidx) + (dir_axis(dir) == AXIS_X) * sign * 2,
-      sq_hpoint_y(sidx) + (dir_axis(dir) == AXIS_Y) * sign * 2);
-}
-u32 half_idx_add_dir_3(u32 sidx, u8 dir) {
-  int sign = sign_flag_to_int(dir_sign_flag(dir));
-  return cb_hpoint_make(
-      cb_hpoint_r(sidx) + (dir_axis(dir) == AXIS_X) * sign * 2,
-      cb_hpoint_g(sidx) + (dir_axis(dir) == AXIS_Y) * sign * 2,
-      cb_hpoint_b(sidx) + (dir_axis(dir) == AXIS_Z) * sign * 2);
-}
-
-u32 idx_add_dir_2(u32 idx, u8 dir) {
-  assert(dir < 6);
-  int sign = sign_flag_to_int(dir_sign_flag(dir));
-  return sq_point_make(sq_point_x(idx) + (dir_axis(dir) == AXIS_X) * sign,
-                       sq_point_y(idx) + (dir_axis(dir) == AXIS_Y) * sign);
-}
-u32 idx_add_dir_3(u32 idx, u8 dir) {
-  int sign = sign_flag_to_int(dir_sign_flag(dir));
-  return cb_point_make(cb_point_r(idx) + (dir_axis(dir) == AXIS_X) * sign,
-                       cb_point_g(idx) + (dir_axis(dir) == AXIS_Y) * sign,
-                       cb_point_b(idx) + (dir_axis(dir) == AXIS_Z) * sign);
-}
-
+// node id for MST generation purposes
+typedef u32 node_id;
 typedef struct edge {
-  u32 from;
-  u32 to;
+  node_id from;
+  node_id to;
 } edge;
 
-int valid_idx(u32 idx) { return idx < 16777216; }
-
-int valid_edge(edge e) { return valid_idx(e.from) && valid_idx(e.to); }
-
-void sort_edges(edge *edges, u32 *weights, u32 from, u32 to, edge *edges_target,
+// mergesort edges weighted by weights
+void edges_sort(edge *edges, u32 *weights, u32 from, u32 to, edge *edges_target,
                 u32 *weights_target) {
   if (to - from <= 1)
     return;
   u32 mid = (from + to) / 2;
-  sort_edges(edges_target, weights_target, from, mid, edges, weights);
-  sort_edges(edges_target, weights_target, mid, to, edges, weights);
+  edges_sort(edges_target, weights_target, from, mid, edges, weights);
+  edges_sort(edges_target, weights_target, mid, to, edges, weights);
   u32 left = from;
   u32 right = mid;
   u32 i = left;
@@ -228,6 +215,12 @@ void sort_edges(edge *edges, u32 *weights, u32 from, u32 to, edge *edges_target,
     memmove(&edges_target[i], &edges[right], (to - right) * sizeof(edge));
   }
 }
+
+// union-find datastructure
+typedef struct dsu {
+  node_id *parent;
+  node_id *size;
+} dsu;
 
 void dsu_init(u32 *dsu, u32 *dsu_size, u32 num_nodes) {
   u32 i;
@@ -262,22 +255,21 @@ void dsu_root_union(u32 *dsu, u32 *dsu_size, u32 root_x, u32 root_y) {
 edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *edge_weights) {
   u32 *dsu = malloc(sizeof(u32) * num_nodes);
   u32 *dsu_size = malloc(sizeof(u32) * num_nodes);
-  edge *edges_sort = malloc(sizeof(edge) * num_edges);
+  edge *edges_sorted = malloc(sizeof(edge) * num_edges);
   u32 *weights_sort = malloc(sizeof(u32) * num_edges);
   edge *out_edges = malloc(sizeof(edge) * (num_nodes - 1));
-  assert(dsu && dsu_size && edges_sort && weights_sort && out_edges);
+  assert(dsu && dsu_size && edges_sorted && weights_sort && out_edges);
   dsu_init(dsu, dsu_size, num_nodes);
-  memcpy(edges_sort, edges, sizeof(edge) * num_edges);
+  memcpy(edges_sorted, edges, sizeof(edge) * num_edges);
   memcpy(weights_sort, edge_weights, sizeof(u32) * num_edges);
-  sort_edges(edges, edge_weights, 0, num_edges, edges_sort, weights_sort);
-  edges = edges_sort;
+  edges_sort(edges, edge_weights, 0, num_edges, edges_sorted, weights_sort);
+  edges = edges_sorted;
   u32 pop_idx = num_edges;
   u32 tree_num_edges = 0;
   u32 tree_max_edges = num_nodes - 1;
   while (tree_num_edges != tree_max_edges) {
     assert(pop_idx);
     edge next_edge = edges[--pop_idx];
-    assert(valid_edge(next_edge));
     u32 root_a = dsu_find(dsu, next_edge.from);
     u32 root_b = dsu_find(dsu, next_edge.to);
     if (root_a != root_b) {
@@ -287,7 +279,7 @@ edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *edge_weights) {
   }
   free(dsu);
   free(dsu_size);
-  free(edges_sort);
+  free(edges_sorted);
   free(weights_sort);
   return out_edges;
 }
@@ -443,12 +435,12 @@ void check_mst(u8 *dir_map, u32 num_nodes, u32 start_idx, int dims) {
     if (dims == 2) {
       for (u32 i = 0; i < 4; i++) {
         if (dir & dir_to_dir_flag(i))
-          stk[stk_ptr++] = half_idx_add_dir_2(top, i);
+          stk[stk_ptr++] = sq_hpoint_add_dir(top, i);
       }
     } else if (dims == 3) {
       for (u32 i = 0; i < 6; i++) {
         if (dir & dir_to_dir_flag(i))
-          stk[stk_ptr++] = half_idx_add_dir_3(top, i);
+          stk[stk_ptr++] = cb_hpoint_add_dir(top, i);
       }
     }
   }
@@ -681,7 +673,7 @@ u8 *resolve_edges_2(u32 num_nodes, u8 *dir_map, u32 start_idx) {
     for (i = 0; i < 4; i++) {
       if (dir & dir_to_dir_flag(i)) {
         dir_out_stk[stk_ptr] = dir_invert(i);
-        stk[stk_ptr++] = half_idx_add_dir_2(top, i);
+        stk[stk_ptr++] = sq_hpoint_add_dir(top, i);
       }
     }
   }
@@ -706,7 +698,6 @@ u8 *resolve_edges_3(u32 num_nodes, u8 *dir_map, u32 start_idx) {
   stk[stk_ptr++] = start_idx;
   while (stk_ptr) {
     u32 top = stk[stk_ptr - 1];
-    assert(valid_idx(top));
     u8 dir = dir_map[top], dirs[8], dir_out = dir_out_stk[stk_ptr - 1], gray[8];
     u8 start_point = start_point_stk[stk_ptr - 1],
        end_point = end_point_stk[stk_ptr - 1];
@@ -729,7 +720,7 @@ u8 *resolve_edges_3(u32 num_nodes, u8 *dir_map, u32 start_idx) {
         start_point_stk[stk_ptr] = gray_point ^ dir_mask;
         end_point_stk[stk_ptr] = gray[(i + 1) % 8] ^ dir_mask;
         dir_out_stk[stk_ptr] = dir_invert(dirs[i]);
-        stk[stk_ptr++] = half_idx_add_dir_3(top, dirs[i]);
+        stk[stk_ptr++] = cb_hpoint_add_dir(top, dirs[i]);
       }
     }
     // if ((++idxidx % 100000) == 0 || idxidx == num_nodes)
@@ -775,8 +766,8 @@ void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
   u32 out_f_ptr = 0;
   fprintf(f, "P6\n%i %i\n255\n", x_span(), y_span());
   do {
-    screen_idx = idx_add_dir_2(screen_idx, screen_dirs[screen_idx]);
-    cube_idx = idx_add_dir_3(cube_idx, cube_dirs[cube_idx]);
+    screen_idx = sq_point_add_dir(screen_idx, screen_dirs[screen_idx]);
+    cube_idx = cb_point_add_dir(cube_idx, cube_dirs[cube_idx]);
     pix[screen_idx] = cube_idx;
   } while (cube_idx != orig_cube_idx);
   for (u32 i = 0; i < x_span() * y_span(); i++) {
