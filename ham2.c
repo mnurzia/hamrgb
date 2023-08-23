@@ -219,47 +219,53 @@ void edges_sort(edge *edges, u32 *weights, u32 from, u32 to, edge *edges_target,
 // union-find datastructure
 typedef struct dsu {
   node_id *parent;
-  node_id *size;
+  u32 *size;
 } dsu;
 
-void dsu_init(u32 *dsu, u32 *dsu_size, u32 num_nodes) {
-  u32 i;
-  for (i = 0; i < num_nodes; i++)
-    dsu[i] = i, dsu_size[i] = 1;
+void dsu_init(dsu *d, node_id max_node) {
+  d->parent = malloc(sizeof(node_id) * max_node);
+  d->size = malloc(sizeof(u32) * max_node);
+  assert(d->parent && d->size);
+  for (u32 i = 0; i < max_node; i++)
+    d->parent[i] = i, d->size[i] = 1;
 }
 
-u32 dsu_find(u32 *dsu, u32 node) {
-  u32 root = node;
-  while (dsu[root] != root)
-    root = dsu[root];
-  while (dsu[node] != root) {
-    u32 parent = dsu[node];
-    dsu[node] = root;
+void dsu_destroy(dsu *d) {
+  free(d->parent);
+  free(d->size);
+}
+
+node_id dsu_find(dsu *d, node_id node) {
+  node_id root = node;
+  while (d->parent[root] != root)
+    root = d->parent[root];
+  while (d->parent[node] != root) {
+    node_id parent = d->parent[node];
+    d->parent[node] = root;
     node = parent;
   }
   return root;
 }
 
-void dsu_root_union(u32 *dsu, u32 *dsu_size, u32 root_x, u32 root_y) {
+void dsu_root_union(dsu *d, node_id root_x, node_id root_y) {
   if (root_x == root_y)
     return;
-  if (dsu_size[root_x] < dsu_size[root_y]) {
-    u32 temp = root_x;
+  if (d->size[root_x] < d->size[root_y]) {
+    node_id temp = root_x;
     root_x = root_y;
     root_y = temp;
   }
-  dsu[root_y] = root_x;
-  dsu_size[root_x] += dsu_size[root_y];
+  d->parent[root_y] = root_x;
+  d->size[root_x] += d->size[root_y];
 }
 
 edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *edge_weights) {
-  u32 *dsu = malloc(sizeof(u32) * num_nodes);
-  u32 *dsu_size = malloc(sizeof(u32) * num_nodes);
   edge *edges_sorted = malloc(sizeof(edge) * num_edges);
   u32 *weights_sort = malloc(sizeof(u32) * num_edges);
   edge *out_edges = malloc(sizeof(edge) * (num_nodes - 1));
-  assert(dsu && dsu_size && edges_sorted && weights_sort && out_edges);
-  dsu_init(dsu, dsu_size, num_nodes);
+  dsu d;
+  assert(edges_sorted && weights_sort && out_edges);
+  dsu_init(&d, num_nodes);
   memcpy(edges_sorted, edges, sizeof(edge) * num_edges);
   memcpy(weights_sort, edge_weights, sizeof(u32) * num_edges);
   edges_sort(edges, edge_weights, 0, num_edges, edges_sorted, weights_sort);
@@ -270,15 +276,14 @@ edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *edge_weights) {
   while (tree_num_edges != tree_max_edges) {
     assert(pop_idx);
     edge next_edge = edges[--pop_idx];
-    u32 root_a = dsu_find(dsu, next_edge.from);
-    u32 root_b = dsu_find(dsu, next_edge.to);
+    u32 root_a = dsu_find(&d, next_edge.from);
+    u32 root_b = dsu_find(&d, next_edge.to);
     if (root_a != root_b) {
-      dsu_root_union(dsu, dsu_size, root_a, root_b);
+      dsu_root_union(&d, root_a, root_b);
       out_edges[tree_num_edges++] = next_edge;
     }
   }
-  free(dsu);
-  free(dsu_size);
+  dsu_destroy(&d);
   free(edges_sorted);
   free(weights_sort);
   return out_edges;
