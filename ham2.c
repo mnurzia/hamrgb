@@ -13,8 +13,20 @@ u32 r_bits = 8;
 u32 g_bits = 8;
 u32 b_bits = 8;
 
+// return number of unique r-coordinates
+u32 r_span() { return 1 << r_bits; }
+// return number of unique g-coordinates
+u32 g_span() { return 1 << g_bits; }
+// return number of unique b-coordinates
+u32 b_span() { return 1 << b_bits; }
+
 u32 x_bits = 12;
 u32 y_bits = 12;
+
+// return number of unique x-coordinates
+u32 x_span() { return 1 << x_bits; }
+// return number of unique y-coordinates
+u32 y_span() { return 1 << y_bits; }
 
 // compose bitfield
 u32 bitfield_compress(u32 value, u32 base_index, u32 width) {
@@ -26,38 +38,157 @@ u32 bitfield_extract(u32 value, u32 base_index, u32 width) {
   return (value >> base_index) & ((1 << width) - 1);
 }
 
-#define SIGNBIT_POS 0
-#define SIGNBIT_NEG 1
+// sign bit used for packed directions
+typedef u8 sign_flag;
+#define SIGN_FLAG_POS 0
+#define SIGN_FLAG_NEG 1
 
-int signbit2sign(u8 signbit) { return ((int)signbit) * -2 + 1; }
+// convert sign bit [0 = positive, 1 = negative] to 1 or -1, respectively
+int sign_flag_to_int(sign_flag sf) { return ((int)sf) * -2 + 1; }
 
+// axes used for moving around the xy rectangle / rgb cube
+typedef u8 axis;
 #define AXIS_X 0
 #define AXIS_Y 1
 #define AXIS_Z 2
 
-u8 iax2ax(u8 iax) { return 1 << iax; }
+// bitset of multiple axes
+typedef u8 axis_flag;
+#define AXIS_FLAG_X axis_to_axis_flag(AXIS_X)
+#define AXIS_FLAG_Y axis_to_axis_flag(AXIS_Y)
+#define AXIS_FLAG_Z axis_to_axis_flag(AXIS_Z)
 
-u8 dir_make(u8 sgn, u8 iax) { return iax * 2 + sgn; }
+// convert axis to an axis flag (bit index)
+axis_flag axis_to_axis_flag(axis ax) { return 1 << ax; }
 
-#define DIR_PX dir_make(SIGNBIT_POS, AXIS_X)
-#define DIR_NX dir_make(SIGNBIT_NEG, AXIS_X)
-#define DIR_PY dir_make(SIGNBIT_POS, AXIS_Y)
-#define DIR_NY dir_make(SIGNBIT_NEG, AXIS_Y)
-#define DIR_PZ dir_make(SIGNBIT_POS, AXIS_Z)
-#define DIR_NZ dir_make(SIGNBIT_NEG, AXIS_Z)
+// a direction is just an axis combined with a sign
+typedef u8 dir;
+#define DIR_PX dir_make(SIGN_FLAG_POS, AXIS_X)
+#define DIR_NX dir_make(SIGN_FLAG_NEG, AXIS_X)
+#define DIR_PY dir_make(SIGN_FLAG_POS, AXIS_Y)
+#define DIR_NY dir_make(SIGN_FLAG_NEG, AXIS_Y)
+#define DIR_PZ dir_make(SIGN_FLAG_POS, AXIS_Z)
+#define DIR_NZ dir_make(SIGN_FLAG_NEG, AXIS_Z)
 #define DIR_INVALID (DIR_NZ + 1)
 
-u8 dir2dirbit(u8 dir) { return 1 << dir; }
-u8 dir_inv(u8 dir) { return (dir & ~1) | !(dir & 1); }
-u8 dir_ax(u8 dir) { return dir >> 1; }
-u8 dir_signbit(u8 dir) { return dir & 1; }
+// create dir from sign flag and axis
+dir dir_make(sign_flag sf, axis ax) { return ax * 2 + sf; }
+// get axis of dir
+dir dir_axis(dir d) { return d >> 1; }
+// get sign of dir
+sign_flag dir_sign_flag(u8 d) { return d & 1; }
+// invert sign of dir
+dir dir_invert(dir d) { return dir_make(!dir_sign_flag(d), dir_axis(d)); }
+// convert dir to string
+const char *dir_to_str(dir d) {
+  return (const char *[]){"+x", "-x", "+y", "-y", "+z", "-z"}[d];
+}
 
-#define DIRBIT_PX dir2dirbit(DIR_PX)
-#define DIRBIT_NX dir2dirbit(DIR_NX)
-#define DIRBIT_PY dir2dirbit(DIR_PY)
-#define DIRBIT_NY dir2dirbit(DIR_NY)
-#define DIRBIT_PZ dir2dirbit(DIR_PZ)
-#define DIRBIT_NZ dir2dirbit(DIR_NZ)
+// bitset of combined directions
+typedef u8 dir_flag;
+#define DIR_FLAG_PX dir_to_dir_flag(DIR_PX)
+#define DIR_FLAG_NX dir_to_dir_flag(DIR_NX)
+#define DIR_FLAG_PY dir_to_dir_flag(DIR_PY)
+#define DIR_FLAG_NY dir_to_dir_flag(DIR_NY)
+#define DIR_FLAG_PZ dir_to_dir_flag(DIR_PZ)
+#define DIR_FLAG_NZ dir_to_dir_flag(DIR_NZ)
+
+// convert dir to dir bitset
+dir_flag dir_to_dir_flag(dir d) { return 1 << d; }
+
+// half-point on the xy square
+typedef u32 sq_hpoint;
+
+// make square half-point from x and y coordinates
+sq_hpoint sq_hpoint_make(u32 x, u32 y) {
+  return bitfield_compress(x >> 1, 0, x_bits - 1) |
+         bitfield_compress(y >> 1, x_bits - 1, y_bits - 1);
+}
+// get x coordinate of half-point
+u32 sq_hpoint_x(sq_hpoint pt) {
+  return bitfield_extract(pt, 0, x_bits - 1) << 1;
+}
+// get y coordinate of half-point
+u32 sq_hpoint_y(sq_hpoint pt) {
+  return bitfield_extract(pt, x_bits - 1, y_bits - 1) << 1;
+}
+
+// point on the xy square
+typedef u32 sq_point;
+// make square point from x and y coordinates
+sq_point sq_point_make(sq_point x, sq_point y) {
+  return bitfield_compress(x, 0, x_bits) | bitfield_compress(y, x_bits, y_bits);
+}
+// get x coordinate of point
+u32 sq_point_x(sq_point idx) { return bitfield_extract(idx, 0, x_bits); }
+// get y coordinate of point
+u32 sq_point_y(sq_point idx) { return bitfield_extract(idx, x_bits, y_bits); }
+
+// half-point on the rgb cube
+typedef u32 cb_hpoint;
+// make cube half-point from r, g, and b coordinates
+cb_hpoint cb_hpoint_make(u32 r, u32 g, u32 b) {
+  return bitfield_compress(r >> 1, 0, r_bits - 1) |
+         bitfield_compress(g >> 1, r_bits - 1, g_bits - 1) |
+         bitfield_compress(b >> 1, (r_bits - 1 + g_bits - 1), b_bits - 1);
+}
+// get r coordinate of half point
+u32 cb_hpoint_r(cb_hpoint sidx) {
+  return bitfield_extract(sidx, 0, r_bits - 1) << 1;
+}
+// get g coordinate of half point
+u32 cb_hpoint_g(cb_hpoint sidx) {
+  return bitfield_extract(sidx, r_bits - 1, g_bits - 1) << 1;
+}
+// get b coordinate of half point
+u32 cb_hpoint_b(cb_hpoint sidx) {
+  return bitfield_extract(sidx, r_bits - 1 + g_bits - 1, b_bits - 1) << 1;
+}
+
+// point on the rgb cube
+typedef u32 cb_point;
+
+// make cube point from r, g, and b coordinates
+cb_point cb_point_make(u32 r, u32 g, u32 b) {
+  return bitfield_compress(r, 0, r_bits) |
+         bitfield_compress(g, r_bits, g_bits) |
+         bitfield_compress(b, r_bits + g_bits, b_bits);
+}
+// get r coordinate of cube point
+u32 cb_point_r(cb_point pt) { return bitfield_extract(pt, 0, r_bits); }
+// get g coordinate of cube point
+u32 cb_point_g(cb_point pt) { return bitfield_extract(pt, r_bits, g_bits); }
+// get b coordinate of cube point
+u32 cb_point_b(cb_point pt) {
+  return bitfield_extract(pt, r_bits + g_bits, b_bits);
+}
+
+u32 half_idx_add_dir_2(u32 sidx, u8 dir) {
+  int sign = sign_flag_to_int(dir_sign_flag(dir));
+  return sq_hpoint_make(
+      sq_hpoint_x(sidx) + (dir_axis(dir) == AXIS_X) * sign * 2,
+      sq_hpoint_y(sidx) + (dir_axis(dir) == AXIS_Y) * sign * 2);
+}
+u32 half_idx_add_dir_3(u32 sidx, u8 dir) {
+  int sign = sign_flag_to_int(dir_sign_flag(dir));
+  return cb_hpoint_make(
+      cb_hpoint_r(sidx) + (dir_axis(dir) == AXIS_X) * sign * 2,
+      cb_hpoint_g(sidx) + (dir_axis(dir) == AXIS_Y) * sign * 2,
+      cb_hpoint_b(sidx) + (dir_axis(dir) == AXIS_Z) * sign * 2);
+}
+
+u32 idx_add_dir_2(u32 idx, u8 dir) {
+  assert(dir < 6);
+  int sign = sign_flag_to_int(dir_sign_flag(dir));
+  return sq_point_make(sq_point_x(idx) + (dir_axis(dir) == AXIS_X) * sign,
+                       sq_point_y(idx) + (dir_axis(dir) == AXIS_Y) * sign);
+}
+u32 idx_add_dir_3(u32 idx, u8 dir) {
+  int sign = sign_flag_to_int(dir_sign_flag(dir));
+  return cb_point_make(cb_point_r(idx) + (dir_axis(dir) == AXIS_X) * sign,
+                       cb_point_g(idx) + (dir_axis(dir) == AXIS_Y) * sign,
+                       cb_point_b(idx) + (dir_axis(dir) == AXIS_Z) * sign);
+}
 
 typedef struct edge {
   u32 from;
@@ -161,79 +292,6 @@ edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *edge_weights) {
   return out_edges;
 }
 
-const char *dir2str(u8 dir) {
-  return (const char *[]){"+x", "-x", "+y", "-y", "+z", "-z"}[dir];
-}
-
-u32 xy2sidx(u32 x, u32 y) {
-  return bitfield_compress(x >> 1, 0, x_bits - 1) |
-         bitfield_compress(y >> 1, x_bits - 1, y_bits - 1);
-}
-u32 sidx2x(u32 sidx) { return bitfield_extract(sidx, 0, x_bits - 1) << 1; }
-u32 sidx2y(u32 sidx) {
-  return bitfield_extract(sidx, x_bits - 1, y_bits - 1) << 1;
-}
-
-u32 xy2idx(u32 x, u32 y) {
-  return bitfield_compress(x, 0, x_bits) | bitfield_compress(y, x_bits, y_bits);
-}
-u32 idx2x(u32 idx) { return bitfield_extract(idx, 0, x_bits); }
-u32 idx2y(u32 idx) { return bitfield_extract(idx, x_bits, y_bits); }
-
-u32 xspan() { return 1 << x_bits; }
-u32 yspan() { return 1 << y_bits; }
-
-u32 rgb2sidx(u32 r, u32 g, u32 b) {
-  return bitfield_compress(r >> 1, 0, r_bits - 1) |
-         bitfield_compress(g >> 1, r_bits - 1, g_bits - 1) |
-         bitfield_compress(b >> 1, (r_bits - 1 + g_bits - 1), b_bits - 1);
-}
-u32 sidx2r(u32 sidx) { return bitfield_extract(sidx, 0, r_bits - 1) << 1; }
-u32 sidx2g(u32 sidx) {
-  return bitfield_extract(sidx, r_bits - 1, g_bits - 1) << 1;
-}
-u32 sidx2b(u32 sidx) {
-  return bitfield_extract(sidx, r_bits - 1 + g_bits - 1, b_bits - 1) << 1;
-}
-
-u32 rgb2idx(u32 r, u32 g, u32 b) {
-  return bitfield_compress(r, 0, r_bits) |
-         bitfield_compress(g, r_bits, g_bits) |
-         bitfield_compress(b, r_bits + g_bits, b_bits);
-}
-u32 idx2r(u32 idx) { return bitfield_extract(idx, 0, r_bits); }
-u32 idx2g(u32 idx) { return bitfield_extract(idx, r_bits, g_bits); }
-u32 idx2b(u32 idx) { return bitfield_extract(idx, r_bits + g_bits, b_bits); }
-
-u32 rspan() { return 1 << r_bits; }
-u32 gspan() { return 1 << g_bits; }
-u32 bspan() { return 1 << b_bits; }
-
-u32 sidx_add_xy(u32 sidx, u8 dir) {
-  int sign = signbit2sign(dir_signbit(dir));
-  return xy2sidx(sidx2x(sidx) + (dir == DIR_NX || dir == DIR_PX) * sign * 2,
-                 sidx2y(sidx) + (dir == DIR_NY || dir == DIR_PY) * sign * 2);
-}
-u32 sidx_add_rgb(u32 sidx, u8 dir) {
-  int sign = signbit2sign(dir_signbit(dir));
-  return rgb2sidx(sidx2r(sidx) + (dir == DIR_NX || dir == DIR_PX) * sign * 2,
-                  sidx2g(sidx) + (dir == DIR_NY || dir == DIR_PY) * sign * 2,
-                  sidx2b(sidx) + (dir == DIR_NZ || dir == DIR_PZ) * sign * 2);
-}
-
-u32 idx_add_xy(u32 idx, u8 dir) {
-  assert(dir < 6);
-  int sign = signbit2sign(dir_signbit(dir));
-  return xy2idx(idx2x(idx) + (dir == DIR_NX || dir == DIR_PX) * sign,
-                idx2y(idx) + (dir == DIR_NY || dir == DIR_PY) * sign);
-}
-u32 idx_add_rgb(u32 idx, u8 dir) {
-  int sign = signbit2sign(dir_signbit(dir));
-  return rgb2idx(idx2r(idx) + (dir == DIR_NX || dir == DIR_PX) * sign,
-                 idx2g(idx) + (dir == DIR_NY || dir == DIR_PY) * sign,
-                 idx2b(idx) + (dir == DIR_NZ || dir == DIR_PZ) * sign);
-}
-
 edge make_edge(u32 from, u32 to) {
   edge out;
   out.from = from;
@@ -249,13 +307,13 @@ edge *make_screen_edges(u32 w, u32 h, u32 *out_num_edges) {
   *out_num_edges = 0;
   for (y = 0; y < h; y += 2) {
     for (x = 0; x < w; x += 2) {
-      u32 this_coord = xy2sidx(x, y);
+      u32 this_coord = sq_hpoint_make(x, y);
       if (x)
         out_edges[(*out_num_edges)++] =
-            make_edge(xy2sidx(x - 2, y), this_coord);
+            make_edge(sq_hpoint_make(x - 2, y), this_coord);
       if (y)
         out_edges[(*out_num_edges)++] =
-            make_edge(xy2sidx(x, y - 2), this_coord);
+            make_edge(sq_hpoint_make(x, y - 2), this_coord);
     }
   }
   return out_edges;
@@ -270,16 +328,16 @@ edge *make_cube_edges(u32 w, u32 h, u32 d, u32 *out_num_edges) {
   for (b = 0; b < d; b += 2) {
     for (g = 0; g < h; g += 2) {
       for (r = 0; r < w; r += 2) {
-        u32 this_coord = rgb2sidx(r, g, b);
+        u32 this_coord = cb_hpoint_make(r, g, b);
         if (r)
           out_edges[(*out_num_edges)++] =
-              make_edge(rgb2sidx(r - 2, g, b), this_coord);
+              make_edge(cb_hpoint_make(r - 2, g, b), this_coord);
         if (g)
           out_edges[(*out_num_edges)++] =
-              make_edge(rgb2sidx(r, g - 2, b), this_coord);
+              make_edge(cb_hpoint_make(r, g - 2, b), this_coord);
         if (b)
           out_edges[(*out_num_edges)++] =
-              make_edge(rgb2sidx(r, g, b - 2), this_coord);
+              make_edge(cb_hpoint_make(r, g, b - 2), this_coord);
       }
     }
   }
@@ -294,21 +352,22 @@ u8 *map_edges(u32 num_nodes, u32 num_edges, edge *edges, int dims) {
     edge e = edges[num_edges];
     u32 dir = 0;
     if (dims == 2) {
-      u32 x0 = sidx2x(e.from), x1 = sidx2x(e.to), y0 = sidx2y(e.from),
-          y1 = sidx2y(e.to);
+      u32 x0 = sq_hpoint_x(e.from), x1 = sq_hpoint_x(e.to),
+          y0 = sq_hpoint_y(e.from), y1 = sq_hpoint_y(e.to);
       if (x1 == x0 + 2)
-        dir = DIRBIT_PX;
+        dir = DIR_FLAG_PX;
       if (y1 == y0 + 2)
-        dir = DIRBIT_PY;
+        dir = DIR_FLAG_PY;
     } else if (dims == 3) {
-      u32 r0 = sidx2r(e.from), r1 = sidx2r(e.to), g0 = sidx2g(e.from),
-          g1 = sidx2g(e.to), b0 = sidx2b(e.from), b1 = sidx2b(e.to);
+      u32 r0 = cb_hpoint_r(e.from), r1 = cb_hpoint_r(e.to),
+          g0 = cb_hpoint_g(e.from), g1 = cb_hpoint_g(e.to),
+          b0 = cb_hpoint_b(e.from), b1 = cb_hpoint_b(e.to);
       if (r1 == r0 + 2)
-        dir = DIRBIT_PX;
+        dir = DIR_FLAG_PX;
       if (g1 == g0 + 2)
-        dir = DIRBIT_PY;
+        dir = DIR_FLAG_PY;
       if (b1 == b0 + 2)
-        dir = DIRBIT_PZ;
+        dir = DIR_FLAG_PZ;
     }
     dir_map[e.from] |= dir;
   }
@@ -325,39 +384,40 @@ u8 *reorient_edges(u32 num_nodes, u8 *dir_map, u32 start_idx, int dims) {
   while (stk_ptr) {
     u32 top = stk[--stk_ptr];
     if (dims == 2) {
-      u32 x = sidx2x(top), y = sidx2y(top), nx, ny;
-      if (x && (dir_map[nx = xy2sidx(x - 2, y)] & DIRBIT_PX))
-        dir_map[nx] &= ~DIRBIT_PX, undir_map[top] |= DIRBIT_NX,
+      u32 x = sq_hpoint_x(top), y = sq_hpoint_y(top), nx, ny;
+      if (x && (dir_map[nx = sq_hpoint_make(x - 2, y)] & DIR_FLAG_PX))
+        dir_map[nx] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_NX,
             stk[stk_ptr++] = nx;
-      if (y && (dir_map[ny = xy2sidx(x, y - 2)] & DIRBIT_PY))
-        dir_map[ny] &= ~DIRBIT_PY, undir_map[top] |= DIRBIT_NY,
+      if (y && (dir_map[ny = sq_hpoint_make(x, y - 2)] & DIR_FLAG_PY))
+        dir_map[ny] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_NY,
             stk[stk_ptr++] = ny;
-      if (dir_map[top] & DIRBIT_PX)
-        dir_map[top] &= ~DIRBIT_PX, undir_map[top] |= DIRBIT_PX,
-            stk[stk_ptr++] = xy2sidx(x + 2, y);
-      if (dir_map[top] & DIRBIT_PY)
-        dir_map[top] &= ~DIRBIT_PY, undir_map[top] |= DIRBIT_PY,
-            stk[stk_ptr++] = xy2sidx(x, y + 2);
+      if (dir_map[top] & DIR_FLAG_PX)
+        dir_map[top] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_PX,
+            stk[stk_ptr++] = sq_hpoint_make(x + 2, y);
+      if (dir_map[top] & DIR_FLAG_PY)
+        dir_map[top] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_PY,
+            stk[stk_ptr++] = sq_hpoint_make(x, y + 2);
     } else if (dims == 3) {
-      u32 r = sidx2r(top), g = sidx2g(top), b = sidx2b(top), nr, ng, nb;
-      if (r && (dir_map[nr = rgb2sidx(r - 2, g, b)] & DIRBIT_PX))
-        dir_map[nr] &= ~DIRBIT_PX, undir_map[top] |= DIRBIT_NX,
+      u32 r = cb_hpoint_r(top), g = cb_hpoint_g(top), b = cb_hpoint_b(top), nr,
+          ng, nb;
+      if (r && (dir_map[nr = cb_hpoint_make(r - 2, g, b)] & DIR_FLAG_PX))
+        dir_map[nr] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_NX,
             stk[stk_ptr++] = nr;
-      if (g && (dir_map[ng = rgb2sidx(r, g - 2, b)] & DIRBIT_PY))
-        dir_map[ng] &= ~DIRBIT_PY, undir_map[top] |= DIRBIT_NY,
+      if (g && (dir_map[ng = cb_hpoint_make(r, g - 2, b)] & DIR_FLAG_PY))
+        dir_map[ng] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_NY,
             stk[stk_ptr++] = ng;
-      if (b && (dir_map[nb = rgb2sidx(r, g, b - 2)] & DIRBIT_PZ))
-        dir_map[nb] &= ~DIRBIT_PZ, undir_map[top] |= DIRBIT_NZ,
+      if (b && (dir_map[nb = cb_hpoint_make(r, g, b - 2)] & DIR_FLAG_PZ))
+        dir_map[nb] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_NZ,
             stk[stk_ptr++] = nb;
-      if (dir_map[top] & DIRBIT_PX)
-        dir_map[top] &= ~DIRBIT_PX, undir_map[top] |= DIRBIT_PX,
-            stk[stk_ptr++] = rgb2sidx(r + 2, g, b);
-      if (dir_map[top] & DIRBIT_PY)
-        dir_map[top] &= ~DIRBIT_PY, undir_map[top] |= DIRBIT_PY,
-            stk[stk_ptr++] = rgb2sidx(r, g + 2, b);
-      if (dir_map[top] & DIRBIT_PZ)
-        dir_map[top] &= ~DIRBIT_PZ, undir_map[top] |= DIRBIT_PZ,
-            stk[stk_ptr++] = rgb2sidx(r, g, b + 2);
+      if (dir_map[top] & DIR_FLAG_PX)
+        dir_map[top] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_PX,
+            stk[stk_ptr++] = cb_hpoint_make(r + 2, g, b);
+      if (dir_map[top] & DIR_FLAG_PY)
+        dir_map[top] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_PY,
+            stk[stk_ptr++] = cb_hpoint_make(r, g + 2, b);
+      if (dir_map[top] & DIR_FLAG_PZ)
+        dir_map[top] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_PZ,
+            stk[stk_ptr++] = cb_hpoint_make(r, g, b + 2);
     }
   }
   free(dir_map);
@@ -382,13 +442,13 @@ void check_mst(u8 *dir_map, u32 num_nodes, u32 start_idx, int dims) {
     found[top] = 1;
     if (dims == 2) {
       for (u32 i = 0; i < 4; i++) {
-        if (dir & dir2dirbit(i))
-          stk[stk_ptr++] = sidx_add_xy(top, i);
+        if (dir & dir_to_dir_flag(i))
+          stk[stk_ptr++] = half_idx_add_dir_2(top, i);
       }
     } else if (dims == 3) {
       for (u32 i = 0; i < 6; i++) {
-        if (dir & dir2dirbit(i))
-          stk[stk_ptr++] = sidx_add_rgb(top, i);
+        if (dir & dir_to_dir_flag(i))
+          stk[stk_ptr++] = half_idx_add_dir_3(top, i);
       }
     }
   }
@@ -456,7 +516,7 @@ void grayinate_2(u8 child_set, u8 dir_out, u8 *out_dirs, u8 *out_gray) {
     out_dirs[dir_to_idx[dir_out]] = dir_out;
   }
   for (i = 0; i < 4; i++) {
-    if (child_set & dir2dirbit(i))
+    if (child_set & dir_to_dir_flag(i))
       out_dirs[dir_to_idx[i]] = i;
     out_gray[i] = gray[i];
   }
@@ -527,7 +587,7 @@ void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
   u64 axis_count = 0, axis;
   u64 dir_axis_set[8] = {0, 0, 0, 0, 0, 0, 0, 0};
   for (i = 0; i < 8; i++) {
-    u8 dir = dirs[i], point = gray[i], inv = dir_inv(dir);
+    u8 dir = dirs[i], point = gray[i], inv = dir_invert(dir);
     for (axis = 0; axis < 3; axis++) {
       u8 sgn = !((1 << axis) & point);
       u8 compat_dir = dir_make(sgn, axis);
@@ -547,9 +607,9 @@ void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
   }
   for (i = 0; i < 6 && child_set; i++) {
     u8 current_dir = dir_argmin(axis_count);
-    u8 current_dirbit = dir2dirbit(current_dir);
+    u8 current_dir_flag = dir_to_dir_flag(current_dir);
     u64 dir_mask = 3 << (2 * current_dir), dir_mask_inv = ~dir_mask;
-    if (current_dirbit & child_set) {
+    if (current_dir_flag & child_set) {
       for (j = 0; j < 8; j++) {
         if (dir_axis_set[j] & dir_mask) { // found matching point, splice out
           axis_count -= dir_axis_set[j];
@@ -563,7 +623,7 @@ void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
           break;
         }
       }
-      child_set &= ~current_dirbit;
+      child_set &= ~current_dir_flag;
     } else {
       // we don't care about this dir
       for (k = 0; k < 8; k++) {
@@ -577,7 +637,7 @@ void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
     out_gray[i] = gray[i];
     assert(gray[i] < 8 && dirs[i] < 6);
   }
-  u8 check = orig_child_set | ((dir_out < 6) ? dir2dirbit(dir_out) : 0);
+  u8 check = orig_child_set | ((dir_out < 6) ? dir_to_dir_flag(dir_out) : 0);
   assert(is_gray(out_gray));
   for (j = 0; j < 8; j++) {
     u8 d = out_dirs[j];
@@ -610,18 +670,18 @@ u8 *resolve_edges_2(u32 num_nodes, u8 *dir_map, u32 start_idx) {
     u32 i;
     stk_ptr--;
     grayinate_2(dir, dir_out, dirs, gray);
-    u32 idx = xy2idx(sidx2x(top), sidx2y(top));
+    u32 idx = sq_point_make(sq_hpoint_x(top), sq_hpoint_y(top));
     for (i = 0; i < 4; i++) {
       u8 gray_point = gray[i];
-      u32 out_idx = xy2idx(idx2x(idx) + (gray_point & 1),
-                           idx2y(idx) + !!(gray_point & 2));
+      u32 out_idx = sq_point_make(sq_point_x(idx) + (gray_point & 1),
+                                  sq_point_y(idx) + !!(gray_point & 2));
       assert(out[out_idx] == 6);
       out[out_idx] = dirs[i];
     }
     for (i = 0; i < 4; i++) {
-      if (dir & dir2dirbit(i)) {
-        dir_out_stk[stk_ptr] = dir_inv(i);
-        stk[stk_ptr++] = sidx_add_xy(top, i);
+      if (dir & dir_to_dir_flag(i)) {
+        dir_out_stk[stk_ptr] = dir_invert(i);
+        stk[stk_ptr++] = half_idx_add_dir_2(top, i);
       }
     }
   }
@@ -653,13 +713,14 @@ u8 *resolve_edges_3(u32 num_nodes, u8 *dir_map, u32 start_idx) {
     u32 i;
     stk_ptr--;
     grayinate_3(start_point, end_point, dir, dir_out, dirs, gray);
-    u32 idx = rgb2idx(sidx2r(top), sidx2g(top), sidx2b(top));
+    u32 idx =
+        cb_point_make(cb_hpoint_r(top), cb_hpoint_g(top), cb_hpoint_b(top));
     for (i = 0; i < 8; i++) {
       u8 gray_point = gray[i];
       assert(dirs[i] < 6);
-      u32 out_idx = rgb2idx(idx2r(idx) + (gray_point & 1),
-                            idx2g(idx) + !!(gray_point & 2),
-                            idx2b(idx) + !!(gray_point & 4));
+      u32 out_idx = cb_point_make(cb_point_r(idx) + (gray_point & 1),
+                                  cb_point_g(idx) + !!(gray_point & 2),
+                                  cb_point_b(idx) + !!(gray_point & 4));
       assert(out[out_idx] == 7);
       out[out_idx] = dirs[i];
       u8 dir_mask = (1 << (dirs[i] >> 1));
@@ -667,8 +728,8 @@ u8 *resolve_edges_3(u32 num_nodes, u8 *dir_map, u32 start_idx) {
           !!(gray_point & dir_mask) ^ (dirs[i] & 1)) {
         start_point_stk[stk_ptr] = gray_point ^ dir_mask;
         end_point_stk[stk_ptr] = gray[(i + 1) % 8] ^ dir_mask;
-        dir_out_stk[stk_ptr] = dir_inv(dirs[i]);
-        stk[stk_ptr++] = sidx_add_rgb(top, dirs[i]);
+        dir_out_stk[stk_ptr] = dir_invert(dirs[i]);
+        stk[stk_ptr++] = half_idx_add_dir_3(top, dirs[i]);
       }
     }
     // if ((++idxidx % 100000) == 0 || idxidx == num_nodes)
@@ -708,19 +769,20 @@ u32 *make_edge_weights(u32 num_edges) {
 void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
   u32 orig_cube_idx = cube_idx;
   FILE *f = fopen("out.pbm", "w");
-  u32 *pix = malloc(sizeof(u32) * xspan() * yspan());
-  u8 *out_f = malloc(sizeof(u8) * xspan() * yspan() * 3);
+  u32 *pix = malloc(sizeof(u32) * x_span() * y_span());
+  u8 *out_f = malloc(sizeof(u8) * x_span() * y_span() * 3);
   assert(pix && out_f);
   u32 out_f_ptr = 0;
-  fprintf(f, "P6\n%i %i\n255\n", xspan(), yspan());
+  fprintf(f, "P6\n%i %i\n255\n", x_span(), y_span());
   do {
-    screen_idx = idx_add_xy(screen_idx, screen_dirs[screen_idx]);
-    cube_idx = idx_add_rgb(cube_idx, cube_dirs[cube_idx]);
+    screen_idx = idx_add_dir_2(screen_idx, screen_dirs[screen_idx]);
+    cube_idx = idx_add_dir_3(cube_idx, cube_dirs[cube_idx]);
     pix[screen_idx] = cube_idx;
   } while (cube_idx != orig_cube_idx);
-  for (u32 i = 0; i < xspan() * yspan(); i++) {
+  for (u32 i = 0; i < x_span() * y_span(); i++) {
     u32 cube_idx = pix[i];
-    u8 r = idx2r(cube_idx), g = idx2g(cube_idx), b = idx2b(cube_idx);
+    u8 r = cb_point_r(cube_idx), g = cb_point_g(cube_idx),
+       b = cb_point_b(cube_idx);
     r = (r << (8 - r_bits));
     g = (g << (8 - g_bits));
     b = (b << (8 - b_bits));
@@ -736,13 +798,13 @@ void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
 
 int main(int argc, const char *const *argv) {
   u32 num_screen_edges, num_cube_edges;
-  u32 num_screen_nodes = xspan() / 2 * yspan() / 2;
-  u32 num_cube_nodes = rspan() / 2 * gspan() / 2 * bspan() / 2;
+  u32 num_screen_nodes = x_span() / 2 * y_span() / 2;
+  u32 num_cube_nodes = r_span() / 2 * g_span() / 2 * b_span() / 2;
 
   printf("making edges...\n");
-  edge *screen_edges = make_screen_edges(xspan(), yspan(), &num_screen_edges);
+  edge *screen_edges = make_screen_edges(x_span(), y_span(), &num_screen_edges);
   edge *cube_edges =
-      make_cube_edges(rspan(), gspan(), bspan(), &num_cube_edges);
+      make_cube_edges(r_span(), g_span(), b_span(), &num_cube_edges);
   printf("making edge weights...\n");
   u32 *screen_edge_weights = make_edge_weights(num_screen_edges);
   u32 *cube_edge_weights = make_edge_weights(num_cube_edges);
