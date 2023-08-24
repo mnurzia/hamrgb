@@ -19,6 +19,8 @@ u32 r_span() { return 1 << r_bits; }
 u32 g_span() { return 1 << g_bits; }
 // return number of unique b-coordinates
 u32 b_span() { return 1 << b_bits; }
+// return number of unique colors
+u32 colors() { return r_span() * g_span() * b_span(); }
 
 u32 x_bits = 12;
 u32 y_bits = 12;
@@ -27,6 +29,8 @@ u32 y_bits = 12;
 u32 x_span() { return 1 << x_bits; }
 // return number of unique y-coordinates
 u32 y_span() { return 1 << y_bits; }
+// return number of unique pixel positions
+u32 pixels() { return x_span() * y_span(); }
 
 // compose bitfield
 u32 bf_compress(u32 value, u32 base_index, u32 width) {
@@ -94,15 +98,15 @@ dir_flag dir_to_dir_flag(dir d) { return 1 << d; }
 
 // point on the xy square
 typedef u32 sq_point;
-// point on the rgb cube
-typedef u32 cb_point;
 // half-point on the xy square
 typedef u32 sq_hpoint;
+// point on the rgb cube
+typedef u32 cb_point;
 // half-point on the rgb cube
 typedef u32 cb_hpoint;
 
 // make square point from x and y coordinates
-sq_point sq_point_make(sq_point x, sq_point y) {
+sq_point sq_point_make(u32 x, u32 y) {
   return bf_compress(x, 0, x_bits) | bf_compress(y, x_bits, y_bits);
 }
 // make square half point from x and y coordinates
@@ -112,12 +116,12 @@ sq_hpoint sq_hpoint_make(u32 x, u32 y) {
 }
 
 // get x coordinate of square point
-u32 sq_point_x(sq_point idx) { return bf_extract(idx, 0, x_bits); }
+u32 sq_point_x(sq_point pt) { return bf_extract(pt, 0, x_bits); }
 // get x coordinate of square half point
 u32 sq_hpoint_x(sq_hpoint pt) { return bf_extract(pt, 0, x_bits - 1) << 1; }
 
 // get y coordinate of square point
-u32 sq_point_y(sq_point idx) { return bf_extract(idx, x_bits, y_bits); }
+u32 sq_point_y(sq_point pt) { return bf_extract(pt, x_bits, y_bits); }
 // get y coordinate of square half point
 u32 sq_hpoint_y(sq_hpoint pt) {
   return bf_extract(pt, x_bits - 1, y_bits - 1) << 1;
@@ -150,18 +154,18 @@ cb_hpoint cb_hpoint_make(u32 r, u32 g, u32 b) {
 // get r coordinate of cube point
 u32 cb_point_r(cb_point pt) { return bf_extract(pt, 0, r_bits); }
 // get r coordinate of cube half point
-u32 cb_hpoint_r(cb_hpoint sidx) { return bf_extract(sidx, 0, r_bits - 1) << 1; }
+u32 cb_hpoint_r(cb_hpoint pt) { return bf_extract(pt, 0, r_bits - 1) << 1; }
 // get g coordinate of cube point
 u32 cb_point_g(cb_point pt) { return bf_extract(pt, r_bits, g_bits); }
 // get g coordinate of cube half point
-u32 cb_hpoint_g(cb_hpoint sidx) {
-  return bf_extract(sidx, r_bits - 1, g_bits - 1) << 1;
+u32 cb_hpoint_g(cb_hpoint pt) {
+  return bf_extract(pt, r_bits - 1, g_bits - 1) << 1;
 }
 // get b coordinate of cube point
 u32 cb_point_b(cb_point pt) { return bf_extract(pt, r_bits + g_bits, b_bits); }
 // get b coordinate of cube half point
-u32 cb_hpoint_b(cb_hpoint sidx) {
-  return bf_extract(sidx, r_bits - 1 + g_bits - 1, b_bits - 1) << 1;
+u32 cb_hpoint_b(cb_hpoint pt) {
+  return bf_extract(pt, r_bits - 1 + g_bits - 1, b_bits - 1) << 1;
 }
 // add direction to cube point
 u32 cb_point_add_dir(cb_point pt, dir d) {
@@ -184,6 +188,14 @@ typedef struct edge {
   node_id from;
   node_id to;
 } edge;
+
+// make an edge going from `from` to `to`
+edge edge_make(node_id from, node_id to) {
+  edge out;
+  out.from = from;
+  out.to = to;
+  return out;
+}
 
 // mergesort edges weighted by weights
 void edges_sort(edge *edges, u32 *weights, u32 from, u32 to, edge *edges_target,
@@ -216,30 +228,35 @@ void edges_sort(edge *edges, u32 *weights, u32 from, u32 to, edge *edges_target,
   }
 }
 
-// union-find datastructure
+// union-find acceleration datastructure
 typedef struct dsu {
   node_id *parent;
   u32 *size;
 } dsu;
 
+// initialize dsu
 void dsu_init(dsu *d, node_id max_node) {
   d->parent = malloc(sizeof(node_id) * max_node);
   d->size = malloc(sizeof(u32) * max_node);
   assert(d->parent && d->size);
-  for (u32 i = 0; i < max_node; i++)
+  for (node_id i = 0; i < max_node; i++)
     d->parent[i] = i, d->size[i] = 1;
 }
 
+// destroy dsu
 void dsu_destroy(dsu *d) {
   free(d->parent);
   free(d->size);
 }
 
+// find root of given node
 node_id dsu_find(dsu *d, node_id node) {
   node_id root = node;
   while (d->parent[root] != root)
+    // drill down the DSU to find the root node (representative set)
     root = d->parent[root];
   while (d->parent[node] != root) {
+    // shorten node->parent chains to accelerate subsequent lookups
     node_id parent = d->parent[node];
     d->parent[node] = root;
     node = parent;
@@ -247,10 +264,12 @@ node_id dsu_find(dsu *d, node_id node) {
   return root;
 }
 
+// union the representative sets of two root nodes
 void dsu_root_union(dsu *d, node_id root_x, node_id root_y) {
-  if (root_x == root_y)
-    return;
+  // for max efficiency we should never call this with root_x == root_y
+  assert(root_x != root_y);
   if (d->size[root_x] < d->size[root_y]) {
+    // keep trees short by grafting larger trees onto smaller ones
     node_id temp = root_x;
     root_x = root_y;
     root_y = temp;
@@ -259,25 +278,29 @@ void dsu_root_union(dsu *d, node_id root_x, node_id root_y) {
   d->size[root_x] += d->size[root_y];
 }
 
-edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *edge_weights) {
-  edge *edges_sorted = malloc(sizeof(edge) * num_edges);
-  u32 *weights_sort = malloc(sizeof(u32) * num_edges);
-  edge *out_edges = malloc(sizeof(edge) * (num_nodes - 1));
+// kruskal's implementation
+edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *weights) {
   dsu d;
-  assert(edges_sorted && weights_sort && out_edges);
   dsu_init(&d, num_nodes);
+  edge *edges_sorted = malloc(sizeof(edge) * num_edges);
+  u32 *weights_sorted = malloc(sizeof(u32) * num_edges);
+  edge *out_edges = malloc(sizeof(edge) * (num_nodes - 1));
+  assert(edges_sorted && weights_sorted && out_edges);
+  // need to copy into edges_sorted/weights_sorted for base case
   memcpy(edges_sorted, edges, sizeof(edge) * num_edges);
-  memcpy(weights_sort, edge_weights, sizeof(u32) * num_edges);
-  edges_sort(edges, edge_weights, 0, num_edges, edges_sorted, weights_sort);
-  edges = edges_sorted;
+  memcpy(weights_sorted, weights, sizeof(u32) * num_edges);
+  edges_sort(edges, weights, 0, num_edges, edges_sorted, weights_sorted);
+  // delete old edges
+  free(edges);
+  free(weights);
   u32 pop_idx = num_edges;
   u32 tree_num_edges = 0;
   u32 tree_max_edges = num_nodes - 1;
   while (tree_num_edges != tree_max_edges) {
     assert(pop_idx);
-    edge next_edge = edges[--pop_idx];
-    u32 root_a = dsu_find(&d, next_edge.from);
-    u32 root_b = dsu_find(&d, next_edge.to);
+    edge next_edge = edges_sorted[--pop_idx];
+    node_id root_a = dsu_find(&d, next_edge.from);
+    node_id root_b = dsu_find(&d, next_edge.to);
     if (root_a != root_b) {
       dsu_root_union(&d, root_a, root_b);
       out_edges[tree_num_edges++] = next_edge;
@@ -285,18 +308,12 @@ edge *kruskinate(u32 num_nodes, u32 num_edges, edge *edges, u32 *edge_weights) {
   }
   dsu_destroy(&d);
   free(edges_sorted);
-  free(weights_sort);
+  free(weights_sorted);
   return out_edges;
 }
 
-edge make_edge(u32 from, u32 to) {
-  edge out;
-  out.from = from;
-  out.to = to;
-  return out;
-}
-
-edge *make_screen_edges(u32 w, u32 h, u32 *out_num_edges) {
+// generate all initial square half point edges
+edge *sq_edges_make(u32 w, u32 h, u32 *out_num_edges) {
   assert(!(w % 2) && !(h % 2));
   edge *out_edges = malloc(sizeof(edge) * ((w / 2) * (h / 2) * 2));
   assert(out_edges);
@@ -304,18 +321,21 @@ edge *make_screen_edges(u32 w, u32 h, u32 *out_num_edges) {
   *out_num_edges = 0;
   for (y = 0; y < h; y += 2) {
     for (x = 0; x < w; x += 2) {
-      u32 this_coord = sq_hpoint_make(x, y);
+      sq_hpoint this_coord = sq_hpoint_make(x, y);
       if (x)
+        // create edge from (x - 2, y) -> (x, y)
         out_edges[(*out_num_edges)++] =
-            make_edge(sq_hpoint_make(x - 2, y), this_coord);
+            edge_make(sq_hpoint_add_dir(this_coord, DIR_NX), this_coord);
       if (y)
+        // create edge from (x, y - 2) -> (x, y)
         out_edges[(*out_num_edges)++] =
-            make_edge(sq_hpoint_make(x, y - 2), this_coord);
+            edge_make(sq_hpoint_add_dir(this_coord, DIR_NY), this_coord);
     }
   }
   return out_edges;
 }
 
+// generate all initial cube half point edges
 edge *make_cube_edges(u32 w, u32 h, u32 d, u32 *out_num_edges) {
   assert(!(w % 2) && !(h % 2) && !(d % 2));
   edge *out_edges = malloc(sizeof(edge) * ((w / 2) * (h / 2) * (d / 2) * 3));
@@ -327,95 +347,126 @@ edge *make_cube_edges(u32 w, u32 h, u32 d, u32 *out_num_edges) {
       for (r = 0; r < w; r += 2) {
         u32 this_coord = cb_hpoint_make(r, g, b);
         if (r)
+          // create edge from (r - 2, g, b) -> (r, g, b)
           out_edges[(*out_num_edges)++] =
-              make_edge(cb_hpoint_make(r - 2, g, b), this_coord);
+              edge_make(cb_hpoint_add_dir(this_coord, DIR_NX), this_coord);
         if (g)
+          // create edge from (r, g - 2, b) -> (r, g, b)
           out_edges[(*out_num_edges)++] =
-              make_edge(cb_hpoint_make(r, g - 2, b), this_coord);
+              edge_make(cb_hpoint_add_dir(this_coord, DIR_NY), this_coord);
         if (b)
+          // create edge from (r, g, b - 2) -> (r, g, b)
           out_edges[(*out_num_edges)++] =
-              make_edge(cb_hpoint_make(r, g, b - 2), this_coord);
+              edge_make(cb_hpoint_add_dir(this_coord, DIR_NZ), this_coord);
       }
     }
   }
   return out_edges;
 }
 
-u8 *map_edges(u32 num_nodes, u32 num_edges, edge *edges, int dims) {
-  u8 *dir_map = malloc(sizeof(u8) * num_nodes);
+// transform edge list into X/2 by Y/2 array of direction flags
+dir_flag *map_square_edges(u32 num_edges, edge *edges) {
+  dir_flag *dir_map = malloc(sizeof(u8) * pixels() / 4);
   assert(dir_map);
-  memset(dir_map, 0, sizeof(u8) * num_nodes);
+  memset(dir_map, 0, sizeof(u8) * pixels() / 4);
   while (num_edges--) {
     edge e = edges[num_edges];
-    u32 dir = 0;
-    if (dims == 2) {
-      u32 x0 = sq_hpoint_x(e.from), x1 = sq_hpoint_x(e.to),
-          y0 = sq_hpoint_y(e.from), y1 = sq_hpoint_y(e.to);
-      if (x1 == x0 + 2)
-        dir = DIR_FLAG_PX;
-      if (y1 == y0 + 2)
-        dir = DIR_FLAG_PY;
-    } else if (dims == 3) {
-      u32 r0 = cb_hpoint_r(e.from), r1 = cb_hpoint_r(e.to),
-          g0 = cb_hpoint_g(e.from), g1 = cb_hpoint_g(e.to),
-          b0 = cb_hpoint_b(e.from), b1 = cb_hpoint_b(e.to);
-      if (r1 == r0 + 2)
-        dir = DIR_FLAG_PX;
-      if (g1 == g0 + 2)
-        dir = DIR_FLAG_PY;
-      if (b1 == b0 + 2)
-        dir = DIR_FLAG_PZ;
-    }
+    dir_flag dir = 0;
+    // only extant edges at this point are in positive directions so we only
+    // need to consider those
+    if (e.to == sq_hpoint_add_dir(e.from, DIR_PX))
+      dir = DIR_FLAG_PX;
+    if (e.to == sq_hpoint_add_dir(e.from, DIR_PY))
+      dir = DIR_FLAG_PY;
     dir_map[e.from] |= dir;
   }
   return dir_map;
 }
 
-u8 *reorient_edges(u32 num_nodes, u8 *dir_map, u32 start_idx, int dims) {
-  u32 *stk = malloc(sizeof(u32) * num_nodes);
-  u8 *undir_map = malloc(sizeof(u8) * num_nodes);
+// transform edge list into R/2 by G/2 by B/2 array of direction flags
+dir_flag *map_cube_edges(u32 num_edges, edge *edges) {
+  dir_flag *dir_map = malloc(sizeof(u8) * colors() / 8);
+  assert(dir_map);
+  memset(dir_map, 0, sizeof(u8) * colors() / 8);
+  while (num_edges--) {
+    edge e = edges[num_edges];
+    dir_flag dir = 0;
+    if (e.to == cb_hpoint_add_dir(e.from, DIR_PX))
+      dir = DIR_FLAG_PX;
+    if (e.to == cb_hpoint_add_dir(e.from, DIR_PY))
+      dir = DIR_FLAG_PY;
+    if (e.to == cb_hpoint_add_dir(e.from, DIR_PZ))
+      dir = DIR_FLAG_PZ;
+    dir_map[e.from] |= dir;
+  }
+  return dir_map;
+}
+
+// given a starting point on the square, flip edges so that we end up with a
+// tree rooted at that point rather than (0, 0).
+dir_flag *reorient_square_edges(dir_flag *dir_map, sq_hpoint start_idx) {
+  sq_hpoint *stk = malloc(sizeof(u32) * pixels() / 4);
+  dir_flag *undir_map = malloc(sizeof(dir_flag) * pixels() / 4);
   assert(stk && undir_map);
-  memset(undir_map, 0, sizeof(u8) * num_nodes);
+  memset(undir_map, 0, sizeof(dir_flag) * pixels() / 4);
   u32 stk_ptr = 0;
   stk[stk_ptr++] = start_idx;
   while (stk_ptr) {
-    u32 top = stk[--stk_ptr];
-    if (dims == 2) {
-      u32 x = sq_hpoint_x(top), y = sq_hpoint_y(top), nx, ny;
-      if (x && (dir_map[nx = sq_hpoint_make(x - 2, y)] & DIR_FLAG_PX))
-        dir_map[nx] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_NX,
-            stk[stk_ptr++] = nx;
-      if (y && (dir_map[ny = sq_hpoint_make(x, y - 2)] & DIR_FLAG_PY))
-        dir_map[ny] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_NY,
-            stk[stk_ptr++] = ny;
-      if (dir_map[top] & DIR_FLAG_PX)
-        dir_map[top] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_PX,
-            stk[stk_ptr++] = sq_hpoint_make(x + 2, y);
-      if (dir_map[top] & DIR_FLAG_PY)
-        dir_map[top] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_PY,
-            stk[stk_ptr++] = sq_hpoint_make(x, y + 2);
-    } else if (dims == 3) {
-      u32 r = cb_hpoint_r(top), g = cb_hpoint_g(top), b = cb_hpoint_b(top), nr,
-          ng, nb;
-      if (r && (dir_map[nr = cb_hpoint_make(r - 2, g, b)] & DIR_FLAG_PX))
-        dir_map[nr] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_NX,
-            stk[stk_ptr++] = nr;
-      if (g && (dir_map[ng = cb_hpoint_make(r, g - 2, b)] & DIR_FLAG_PY))
-        dir_map[ng] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_NY,
-            stk[stk_ptr++] = ng;
-      if (b && (dir_map[nb = cb_hpoint_make(r, g, b - 2)] & DIR_FLAG_PZ))
-        dir_map[nb] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_NZ,
-            stk[stk_ptr++] = nb;
-      if (dir_map[top] & DIR_FLAG_PX)
-        dir_map[top] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_PX,
-            stk[stk_ptr++] = cb_hpoint_make(r + 2, g, b);
-      if (dir_map[top] & DIR_FLAG_PY)
-        dir_map[top] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_PY,
-            stk[stk_ptr++] = cb_hpoint_make(r, g + 2, b);
-      if (dir_map[top] & DIR_FLAG_PZ)
-        dir_map[top] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_PZ,
-            stk[stk_ptr++] = cb_hpoint_make(r, g, b + 2);
-    }
+    sq_hpoint top = stk[--stk_ptr];
+    u32 x = sq_hpoint_x(top), y = sq_hpoint_y(top), nx, ny;
+    if (x && (dir_map[nx = sq_hpoint_make(x - 2, y)] & DIR_FLAG_PX))
+      // flip (x - 2, y) -> (x, y) to (x, y) -> (x - 2, y)
+      dir_map[nx] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_NX,
+          stk[stk_ptr++] = nx;
+    if (y && (dir_map[ny = sq_hpoint_make(x, y - 2)] & DIR_FLAG_PY))
+      // flip (x, y - 2) -> (x, y) to (x, y) -> (x, y - 2)
+      dir_map[ny] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_NY,
+          stk[stk_ptr++] = ny;
+    if (dir_map[top] & DIR_FLAG_PX)
+      // pass (x, y) -> (x + 2, y)
+      dir_map[top] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_PX,
+          stk[stk_ptr++] = sq_hpoint_make(x + 2, y);
+    if (dir_map[top] & DIR_FLAG_PY)
+      // pass (x, y) -> (x, y + 2)
+      dir_map[top] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_PY,
+          stk[stk_ptr++] = sq_hpoint_make(x, y + 2);
+  }
+  free(dir_map);
+  free(stk);
+  return undir_map;
+}
+
+// given a starting point on the cube, flip edges so that we end up with a tree
+// rooted at that point rather than (0, 0, 0).
+dir_flag *reorient_cube_edges(dir_flag *dir_map, cb_hpoint start_idx) {
+  cb_hpoint *stk = malloc(sizeof(u32) * colors() / 8);
+  dir_flag *undir_map = malloc(sizeof(dir_flag) * colors() / 8);
+  assert(stk && undir_map);
+  memset(undir_map, 0, sizeof(dir_flag) * colors() / 8);
+  u32 stk_ptr = 0;
+  stk[stk_ptr++] = start_idx;
+  while (stk_ptr) {
+    cb_hpoint top = stk[--stk_ptr];
+    u32 r = cb_hpoint_r(top), g = cb_hpoint_g(top), b = cb_hpoint_b(top), nr,
+        ng, nb;
+    if (r && (dir_map[nr = cb_hpoint_make(r - 2, g, b)] & DIR_FLAG_PX))
+      dir_map[nr] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_NX,
+          stk[stk_ptr++] = nr;
+    if (g && (dir_map[ng = cb_hpoint_make(r, g - 2, b)] & DIR_FLAG_PY))
+      dir_map[ng] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_NY,
+          stk[stk_ptr++] = ng;
+    if (b && (dir_map[nb = cb_hpoint_make(r, g, b - 2)] & DIR_FLAG_PZ))
+      dir_map[nb] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_NZ,
+          stk[stk_ptr++] = nb;
+    if (dir_map[top] & DIR_FLAG_PX)
+      dir_map[top] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_PX,
+          stk[stk_ptr++] = cb_hpoint_make(r + 2, g, b);
+    if (dir_map[top] & DIR_FLAG_PY)
+      dir_map[top] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_PY,
+          stk[stk_ptr++] = cb_hpoint_make(r, g + 2, b);
+    if (dir_map[top] & DIR_FLAG_PZ)
+      dir_map[top] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_PZ,
+          stk[stk_ptr++] = cb_hpoint_make(r, g, b + 2);
   }
   free(dir_map);
   free(stk);
@@ -798,7 +849,7 @@ int main(int argc, const char *const *argv) {
   u32 num_cube_nodes = r_span() / 2 * g_span() / 2 * b_span() / 2;
 
   printf("making edges...\n");
-  edge *screen_edges = make_screen_edges(x_span(), y_span(), &num_screen_edges);
+  edge *screen_edges = sq_edges_make(x_span(), y_span(), &num_screen_edges);
   edge *cube_edges =
       make_cube_edges(r_span(), g_span(), b_span(), &num_cube_edges);
   printf("making edge weights...\n");
@@ -810,13 +861,11 @@ int main(int argc, const char *const *argv) {
   cube_edges =
       kruskinate(num_cube_nodes, num_cube_edges, cube_edges, cube_edge_weights);
   printf("mapping edges...\n");
-  u8 *screen_edge_dirs =
-      map_edges(num_screen_nodes, num_screen_nodes - 1, screen_edges, 2);
-  u8 *cube_edge_dirs =
-      map_edges(num_cube_nodes, num_cube_nodes - 1, cube_edges, 3);
+  u8 *screen_edge_dirs = map_square_edges(num_screen_nodes - 1, screen_edges);
+  u8 *cube_edge_dirs = map_cube_edges(num_cube_nodes - 1, cube_edges);
   printf("reorienting edges...\n");
-  screen_edge_dirs = reorient_edges(num_screen_nodes, screen_edge_dirs, 0, 2);
-  cube_edge_dirs = reorient_edges(num_cube_nodes, cube_edge_dirs, 0, 3);
+  screen_edge_dirs = reorient_square_edges(screen_edge_dirs, 0);
+  cube_edge_dirs = reorient_cube_edges(cube_edge_dirs, 0);
   check_mst(screen_edge_dirs, num_screen_nodes, 0, 2);
   check_mst(cube_edge_dirs, num_cube_nodes, 0, 3);
   printf("resolving edges...\n");
