@@ -252,6 +252,9 @@ void dsu_destroy(dsu *d) {
 // find root of given node
 node_id dsu_find(dsu *d, node_id node) {
   node_id root = node;
+#define DSU_JIT_METHOD 0
+#if DSU_JIT_METHOD == 0
+  // path compression
   while (d->parent[root] != root)
     // drill down the DSU to find the root node (representative set)
     root = d->parent[root];
@@ -261,6 +264,22 @@ node_id dsu_find(dsu *d, node_id node) {
     d->parent[node] = root;
     node = parent;
   }
+#elif DSU_JIT_METHOD == 1
+  // path splitting
+  while (d->parent[root] != root) {
+    node_id parent = d->parent[root], grandparent = d->parent[parent];
+    d->parent[root] = parent, d->parent[parent] = grandparent;
+    root = parent;
+  }
+#elif DSU_JIT_METHOD == 2
+  // path halving
+  while (d->parent[root] != root) {
+    node_id parent = d->parent[root], grandparent = d->parent[parent];
+    d->parent[parent] = grandparent;
+    d->parent[root] = grandparent;
+    root = grandparent;
+  }
+#endif
   return root;
 }
 
