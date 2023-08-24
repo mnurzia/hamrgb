@@ -450,21 +450,27 @@ dir_flag *reorient_cube_edges(dir_flag *dir_map, cb_hpoint start_idx) {
     u32 r = cb_hpoint_r(top), g = cb_hpoint_g(top), b = cb_hpoint_b(top), nr,
         ng, nb;
     if (r && (dir_map[nr = cb_hpoint_make(r - 2, g, b)] & DIR_FLAG_PX))
+      // flip (r - 2, g, b) -> (r, g, b) to (r, g, b) -> (r - 2, g, b)
       dir_map[nr] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_NX,
           stk[stk_ptr++] = nr;
     if (g && (dir_map[ng = cb_hpoint_make(r, g - 2, b)] & DIR_FLAG_PY))
+      // flip (r, g - 2, b) -> (r, g, b) to (r, g, b) -> (r, g - 2, b)
       dir_map[ng] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_NY,
           stk[stk_ptr++] = ng;
     if (b && (dir_map[nb = cb_hpoint_make(r, g, b - 2)] & DIR_FLAG_PZ))
+      // flip (r, g, b - 2) -> (r, g, b) to (r, g, b) -> (r, g, b -2)
       dir_map[nb] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_NZ,
           stk[stk_ptr++] = nb;
     if (dir_map[top] & DIR_FLAG_PX)
+      // pass (r, g, b) -> (r + 2, g, b)
       dir_map[top] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_PX,
           stk[stk_ptr++] = cb_hpoint_make(r + 2, g, b);
     if (dir_map[top] & DIR_FLAG_PY)
+      // pass (r, g, b) -> (r, g + 2, b)
       dir_map[top] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_PY,
           stk[stk_ptr++] = cb_hpoint_make(r, g + 2, b);
     if (dir_map[top] & DIR_FLAG_PZ)
+      // pass (r, g, b) -> (r, g, b + 2)
       dir_map[top] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_PZ,
           stk[stk_ptr++] = cb_hpoint_make(r, g, b + 2);
   }
@@ -473,46 +479,16 @@ dir_flag *reorient_cube_edges(dir_flag *dir_map, cb_hpoint start_idx) {
   return undir_map;
 }
 
-int valid_dir_set(u8 dir_set) { return dir_set < (1 << 6); }
+typedef u8 *gray3;
 
-void check_mst(u8 *dir_map, u32 num_nodes, u32 start_idx, int dims) {
-  u32 *stk = malloc(sizeof(u32) * num_nodes);
-  u8 *found = malloc(sizeof(u8) * num_nodes);
-  assert(stk && found);
-  memset(found, 0, sizeof(u8) * num_nodes);
-  u32 stk_ptr = 0;
-  stk[stk_ptr++] = start_idx;
-  while (stk_ptr) {
-    u32 top = stk[--stk_ptr];
-    u8 dir = dir_map[top];
-    assert(valid_dir_set(dir));
-    assert(!found[top]);
-    found[top] = 1;
-    if (dims == 2) {
-      for (u32 i = 0; i < 4; i++) {
-        if (dir & dir_to_dir_flag(i))
-          stk[stk_ptr++] = sq_hpoint_add_dir(top, i);
-      }
-    } else if (dims == 3) {
-      for (u32 i = 0; i < 6; i++) {
-        if (dir & dir_to_dir_flag(i))
-          stk[stk_ptr++] = cb_hpoint_add_dir(top, i);
-      }
-    }
-  }
-  for (u32 i = 0; i < num_nodes; i++) {
-    assert(found[i]);
-  }
-  free(stk);
-  free(found);
-}
-
-void gray_invert(u8 *g, u8 mask) {
+// invert `mask` bits in every element of `g`
+void gray3_invert(gray3 g, axis_flag mask) {
   for (int i = 0; i < 8; i++)
     g[i] = ((~g[i] & mask) | (g[i] & ~mask)) & 7;
 }
 
-void gray_swap(u8 *g, u8 a_mask, u8 b_mask) {
+// swap single bits `a_mask` and `b_mask` in every element of `g`
+void gray3_swap(gray3 g, axis_flag a_mask, axis_flag b_mask) {
   u8 others = ~(a_mask | b_mask);
   for (int i = 0; i < 8; i++) {
     g[i] = (g[i] & others) | (!!(g[i] & a_mask) * b_mask) |
@@ -520,113 +496,86 @@ void gray_swap(u8 *g, u8 a_mask, u8 b_mask) {
   }
 }
 
-u8 popcount_2(u8 point) { return !!(point & 1) + !!(point & 2); }
+// popcount of point on gray square
+u8 popcount_2(axis_flag point) { return !!(point & 1) + !!(point & 2); }
 
-u8 popcount(u8 point) { return !!(point & 1) + !!(point & 2) + !!(point & 4); }
-
-const char *point2str(u8 point) {
-  return (const char *[]){"000", "001", "010", "011",
-                          "100", "101", "110", "111"}[point];
+// popcount of point on gray cube
+u8 popcount_3(axis_flag point) {
+  return !!(point & 1) + !!(point & 2) + !!(point & 4);
 }
 
-u8 dir_argmin(u64 packed_acount) {
-  u8 v = 4;
-  u8 j = 0;
-  for (u8 i = 0; i < 6; i++) {
-    u8 pack = packed_acount & ((1 << 2) - 1);
-    if (pack && pack < v)
-      v = pack, j = i;
-    packed_acount >>= 2;
+// find direction with fewest nonzero amount of remaining splice locations
+dir dir_argmin(u32 packed_axis_count) {
+  u8 min = 4;
+  dir d = 0;
+  for (dir i = 0; i < 6; i++) {
+    u8 num_remaining_splices = packed_axis_count & ((1 << 2) - 1);
+    if (num_remaining_splices && num_remaining_splices < min)
+      min = num_remaining_splices, d = i;
+    packed_axis_count >>= 2;
   }
-  return j;
+  return d;
 }
 
-int is_gray_2(u8 *gray) {
-  u8 found = 0;
-  for (int i = 0; i < 4; i++) {
-    if (!(popcount_2(gray[i] ^ gray[(i + 1) % 4]) == 1))
-      return 0;
-    if (found & (1 << gray[i]))
-      return 0;
-    found |= 1 << gray[i];
-  }
-  return 1;
-}
-
-void grayinate_2(u8 child_set, u8 dir_out, u8 *out_dirs, u8 *out_gray) {
-  u8 gray[4] = {0, 1, 3, 2}, dirs[4] = {DIR_PX, DIR_PY, DIR_NX, DIR_NY};
-  u8 i;
+// given bitset of out-edges, and index of in-edge, compute a gray code that
+// visits all four positions on the unit square, and additionally the direction
+// for each of those positions.
+void grayinate_2(dir_flag child_set, dir dir_out, dir *out_dirs,
+                 axis_flag *out_gray) {
+  // base 2-bit gray code 00 01 11 10
+  axis_flag gray[4] = {0, 1, 3, 2};
+  // base direction for each pair of the above code
+  dir dirs[4] = {DIR_PX, DIR_PY, DIR_NX, DIR_NY};
+  // inverse of the above table
   u8 dir_to_idx[4] = {1, 3, 2, 0};
-  for (i = 0; i < 4; i++) {
+  // copy base directions to out directoins
+  for (dir i = 0; i < 4; i++) {
     out_dirs[i] = dirs[i];
   }
+  // if this isn't the root square, we have an output direction
   if (dir_out < 6) {
     out_dirs[dir_to_idx[dir_out]] = dir_out;
   }
-  for (i = 0; i < 4; i++) {
+  // set directions of relevant out-edges
+  for (dir i = 0; i < 4; i++) {
     if (child_set & dir_to_dir_flag(i))
       out_dirs[dir_to_idx[i]] = i;
     out_gray[i] = gray[i];
   }
-  assert(is_gray_2(out_gray));
 }
 
-void print_gray(u8 *g) {
-  for (u32 i = 0; i < 8; i++) {
-    printf("%s%s", i ? " > " : "", point2str(g[i]));
-  }
-  printf("\n");
-}
-
-void print_bin(u64 b, u8 w) {
-  for (u8 i = 0; i < w; i++) {
-    if (b & (1 << ((w - i) - 1)))
-      printf("1");
-    else
-      printf("0");
-  }
-}
-
-int is_gray(u8 *gray) {
-  u8 found = 0;
-  for (int i = 0; i < 8; i++) {
-    if (!(popcount(gray[i] ^ gray[(i + 1) % 8]) == 1))
-      return 0;
-    if (found & (1 << gray[i]))
-      return 0;
-    found |= 1 << gray[i];
-  }
-  return 1;
-}
-
-void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
-                 u8 *out_dirs, u8 *out_gray) {
+// given bitset of out-edges, and index of in-edge, compute a gray code that
+// visits all eight positions on the unit cube, and additionally the direction
+// for each of those positions.
+// Additionally, the gray code must start and end at given points on the cube.
+void grayinate_3(axis_flag start_point, axis_flag end_point, dir_flag child_set,
+                 dir dir_out, dir *out_dirs, u8 *out_gray) {
   u8 gray[8] = {0, 1, 3, 2, 6, 7, 5, 4}, start_pc, i, j, k,
      orig_child_set = child_set;
   assert(child_set < (1 << 6));
-  if ((start_pc = popcount(start_point)) > popcount(end_point))
-    gray_invert(gray, 7);
+  if ((start_pc = popcount_3(start_point)) > popcount_3(end_point))
+    gray3_invert(gray, 7);
   i = 1;
-  while (popcount(gray[0]) != start_pc) {
+  while (popcount_3(gray[0]) != start_pc) {
     if ((gray[0] & i) == (gray[7] & i))
-      gray_invert(gray, i);
+      gray3_invert(gray, i);
     i <<= 1;
   }
   for (i = 1; i < 4; i <<= 1) {
     for (j = i << 1; j < 8; j <<= 1) {
       if (((gray[0] & i) != (start_point & i)) &&
           (gray[0] & j) != (start_point & j))
-        gray_swap(gray, i, j);
+        gray3_swap(gray, i, j);
       else if (((gray[7] & i) != (end_point & i)) &&
                (gray[7] & j) != (end_point & j))
-        gray_swap(gray, i, j);
+        gray3_swap(gray, i, j);
     }
   }
   u8 dirs[8] = {0, 0, 0, 0, 0, 0, 0, 0};
   for (i = 0; i < 8; i++) {
     u8 a = gray[i], b = gray[(i + 1) & 7];
     u8 diff = a ^ b;
-    assert(popcount(diff) == 1);
+    assert(popcount_3(diff) == 1);
     u8 sign = !(b & diff); // 0 = pos, 1 = neg
     dirs[i] = !!(diff & 1) * DIR_PX + !!(diff & 2) * DIR_PY +
               !!(diff & 4) * DIR_PZ + sign;
@@ -686,7 +635,6 @@ void grayinate_3(u8 start_point, u8 end_point, u8 child_set, u8 dir_out,
     assert(gray[i] < 8 && dirs[i] < 6);
   }
   u8 check = orig_child_set | ((dir_out < 6) ? dir_to_dir_flag(dir_out) : 0);
-  assert(is_gray(out_gray));
   for (j = 0; j < 8; j++) {
     u8 d = out_dirs[j];
     for (axis = 0; axis < 3; axis++) {
@@ -791,7 +739,6 @@ u8 *resolve_edges_3(u32 num_nodes, u8 *dir_map, u32 start_idx) {
 
 // exact bias: 0.020888578919738908
 uint32_t triple32(uint32_t x) {
-  x += 5;
   x ^= x >> 17;
   x *= 0xed5ad4bbU;
   x ^= x >> 11;
@@ -804,9 +751,10 @@ uint32_t triple32(uint32_t x) {
 
 u32 *make_edge_weights(u32 num_edges) {
   u32 *out = malloc(sizeof(u32) * num_edges);
+  u32 rand = 5;
   assert(out);
   for (u32 i = 0; i < num_edges; i++) {
-    out[i] = triple32(i);
+    out[i] = (rand = triple32(rand));
   }
   return out;
 }
@@ -866,8 +814,6 @@ int main(int argc, const char *const *argv) {
   printf("reorienting edges...\n");
   screen_edge_dirs = reorient_square_edges(screen_edge_dirs, 0);
   cube_edge_dirs = reorient_cube_edges(cube_edge_dirs, 0);
-  check_mst(screen_edge_dirs, num_screen_nodes, 0, 2);
-  check_mst(cube_edge_dirs, num_cube_nodes, 0, 3);
   printf("resolving edges...\n");
   u8 *out_screen_dirs = resolve_edges_2(num_screen_nodes, screen_edge_dirs, 0);
   u8 *out_cube_dirs = resolve_edges_3(num_cube_nodes, cube_edge_dirs, 0);
