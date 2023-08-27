@@ -54,6 +54,12 @@ typedef u8 axis;
 #define AXIS_X 0
 #define AXIS_Y 1
 #define AXIS_Z 2
+// get span of axis (square)
+u32 axis_span_square(axis ax) { return (ax == AXIS_X) ? x_span() : y_span(); }
+// get span of axis (cube)
+u32 axis_span_cube(axis ax) {
+  return (ax == AXIS_X) ? r_span() : (ax == AXIS_Y) ? g_span() : b_span();
+}
 
 // bitset of multiple axes
 typedef u8 axis_flag;
@@ -139,6 +145,14 @@ sq_hpoint sq_hpoint_add_dir(sq_hpoint pt, dir d) {
   return sq_hpoint_make(sq_hpoint_x(pt) + (dir_axis(d) == AXIS_X) * sign * 2,
                         sq_hpoint_y(pt) + (dir_axis(d) == AXIS_Y) * sign * 2);
 }
+// get axis component of square point
+u32 sq_point_get_axis(sq_point pt, axis ax) {
+  return (ax == AXIS_X) ? sq_point_x(pt) : sq_point_y(pt);
+}
+// get axis component of square half point
+u32 sq_hpoint_get_axis(sq_hpoint pt, axis ax) {
+  return (ax == AXIS_X) ? sq_hpoint_x(pt) : sq_hpoint_y(pt);
+}
 
 // make cube point from r, g, and b coordinates
 cb_point cb_point_make(u32 r, u32 g, u32 b) {
@@ -181,6 +195,18 @@ u32 cb_hpoint_add_dir(cb_hpoint pt, dir d) {
   return cb_hpoint_make(cb_hpoint_r(pt) + (dir_axis(d) == AXIS_X) * sign * 2,
                         cb_hpoint_g(pt) + (dir_axis(d) == AXIS_Y) * sign * 2,
                         cb_hpoint_b(pt) + (dir_axis(d) == AXIS_Z) * sign * 2);
+}
+// get axis component of cube point
+u32 cb_point_get_axis(cb_point pt, axis ax) {
+  return (ax == AXIS_X)   ? cb_point_r(pt)
+         : (ax == AXIS_Y) ? cb_point_g(pt)
+                          : cb_point_b(pt);
+}
+// get axis component of cube half point
+u32 cb_hpoint_get_axis(cb_hpoint pt, axis ax) {
+  return (ax == AXIS_X)   ? cb_hpoint_r(pt)
+         : (ax == AXIS_Y) ? cb_hpoint_g(pt)
+                          : cb_hpoint_b(pt);
 }
 
 // node id for MST generation purposes
@@ -392,14 +418,14 @@ dir_flag *map_square_edges(u32 num_edges, edge *edges) {
   memset(dir_map, 0, sizeof(u8) * pixels() / 4);
   while (num_edges--) {
     edge e = edges[num_edges];
-    dir_flag dir = 0;
-    // only extant edges at this point are in positive directions so we only
-    // need to consider those
-    if (e.to == sq_hpoint_add_dir(e.from, DIR_PX))
-      dir = DIR_FLAG_PX;
-    if (e.to == sq_hpoint_add_dir(e.from, DIR_PY))
-      dir = DIR_FLAG_PY;
-    dir_map[e.from] |= dir;
+    dir_flag dir_mask = 0;
+    for (dir i = 0; i < 4; i++) {
+      if (e.to == sq_hpoint_add_dir(e.from, i)) {
+        dir_mask = dir_to_dir_flag(i);
+        break;
+      }
+    }
+    dir_map[e.from] |= dir_mask;
   }
   return dir_map;
 }
@@ -411,14 +437,14 @@ dir_flag *map_cube_edges(u32 num_edges, edge *edges) {
   memset(dir_map, 0, sizeof(u8) * colors() / 8);
   while (num_edges--) {
     edge e = edges[num_edges];
-    dir_flag dir = 0;
-    if (e.to == cb_hpoint_add_dir(e.from, DIR_PX))
-      dir = DIR_FLAG_PX;
-    if (e.to == cb_hpoint_add_dir(e.from, DIR_PY))
-      dir = DIR_FLAG_PY;
-    if (e.to == cb_hpoint_add_dir(e.from, DIR_PZ))
-      dir = DIR_FLAG_PZ;
-    dir_map[e.from] |= dir;
+    dir_flag dir_mask = 0;
+    for (dir i = 0; i < 6; i++) {
+      if (e.to == cb_hpoint_add_dir(e.from, i)) {
+        dir_mask = dir_to_dir_flag(i);
+        break;
+      }
+    }
+    dir_map[e.from] |= dir_mask;
   }
   return dir_map;
 }
@@ -434,23 +460,25 @@ dir_flag *reorient_square_edges(dir_flag *dir_map, sq_hpoint start_idx) {
   stk[stk_ptr++] = start_idx;
   while (stk_ptr) {
     sq_hpoint top = stk[--stk_ptr];
-    u32 x = sq_hpoint_x(top), y = sq_hpoint_y(top), nx, ny;
-    if (x && (dir_map[nx = sq_hpoint_make(x - 2, y)] & DIR_FLAG_PX))
-      // flip (x - 2, y) -> (x, y) to (x, y) -> (x - 2, y)
-      dir_map[nx] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_NX,
-          stk[stk_ptr++] = nx;
-    if (y && (dir_map[ny = sq_hpoint_make(x, y - 2)] & DIR_FLAG_PY))
-      // flip (x, y - 2) -> (x, y) to (x, y) -> (x, y - 2)
-      dir_map[ny] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_NY,
-          stk[stk_ptr++] = ny;
-    if (dir_map[top] & DIR_FLAG_PX)
-      // pass (x, y) -> (x + 2, y)
-      dir_map[top] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_PX,
-          stk[stk_ptr++] = sq_hpoint_make(x + 2, y);
-    if (dir_map[top] & DIR_FLAG_PY)
-      // pass (x, y) -> (x, y + 2)
-      dir_map[top] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_PY,
-          stk[stk_ptr++] = sq_hpoint_make(x, y + 2);
+    for (dir i = 0; i < 4; i++) {
+      u32 npos;
+      dir ndir;
+      if (sq_hpoint_get_axis(top, dir_axis(i)) ==
+          ((dir_sign_flag(i) == SIGN_FLAG_POS)
+               ? axis_span_square(dir_axis(i)) - 1
+               : 0))
+        continue;
+      if (dir_map[npos = sq_hpoint_add_dir(top, i)] &
+          (ndir = dir_to_dir_flag(dir_invert(i))))
+        dir_map[npos] &= ~ndir, undir_map[top] |= dir_to_dir_flag(i),
+            stk[stk_ptr++] = npos;
+    }
+    for (dir i = 0; i < 4; i++) {
+      dir d_flag;
+      if (dir_map[top] & (d_flag = dir_to_dir_flag(i)))
+        dir_map[top] &= ~d_flag, undir_map[top] |= d_flag,
+            stk[stk_ptr++] = sq_hpoint_add_dir(top, i);
+    }
   }
   free(dir_map);
   free(stk);
@@ -468,32 +496,24 @@ dir_flag *reorient_cube_edges(dir_flag *dir_map, cb_hpoint start_idx) {
   stk[stk_ptr++] = start_idx;
   while (stk_ptr) {
     cb_hpoint top = stk[--stk_ptr];
-    u32 r = cb_hpoint_r(top), g = cb_hpoint_g(top), b = cb_hpoint_b(top), nr,
-        ng, nb;
-    if (r && (dir_map[nr = cb_hpoint_make(r - 2, g, b)] & DIR_FLAG_PX))
-      // flip (r - 2, g, b) -> (r, g, b) to (r, g, b) -> (r - 2, g, b)
-      dir_map[nr] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_NX,
-          stk[stk_ptr++] = nr;
-    if (g && (dir_map[ng = cb_hpoint_make(r, g - 2, b)] & DIR_FLAG_PY))
-      // flip (r, g - 2, b) -> (r, g, b) to (r, g, b) -> (r, g - 2, b)
-      dir_map[ng] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_NY,
-          stk[stk_ptr++] = ng;
-    if (b && (dir_map[nb = cb_hpoint_make(r, g, b - 2)] & DIR_FLAG_PZ))
-      // flip (r, g, b - 2) -> (r, g, b) to (r, g, b) -> (r, g, b -2)
-      dir_map[nb] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_NZ,
-          stk[stk_ptr++] = nb;
-    if (dir_map[top] & DIR_FLAG_PX)
-      // pass (r, g, b) -> (r + 2, g, b)
-      dir_map[top] &= ~DIR_FLAG_PX, undir_map[top] |= DIR_FLAG_PX,
-          stk[stk_ptr++] = cb_hpoint_make(r + 2, g, b);
-    if (dir_map[top] & DIR_FLAG_PY)
-      // pass (r, g, b) -> (r, g + 2, b)
-      dir_map[top] &= ~DIR_FLAG_PY, undir_map[top] |= DIR_FLAG_PY,
-          stk[stk_ptr++] = cb_hpoint_make(r, g + 2, b);
-    if (dir_map[top] & DIR_FLAG_PZ)
-      // pass (r, g, b) -> (r, g, b + 2)
-      dir_map[top] &= ~DIR_FLAG_PZ, undir_map[top] |= DIR_FLAG_PZ,
-          stk[stk_ptr++] = cb_hpoint_make(r, g, b + 2);
+    for (dir i = 0; i < 6; i++) {
+      u32 npos;
+      dir ndir;
+      if (cb_hpoint_get_axis(top, dir_axis(i)) ==
+          ((dir_sign_flag(i) == SIGN_FLAG_POS) ? axis_span_cube(dir_axis(i)) - 1
+                                               : 0))
+        continue;
+      if (dir_map[npos = cb_hpoint_add_dir(top, i)] &
+          (ndir = dir_to_dir_flag(dir_invert(i))))
+        dir_map[npos] &= ~ndir, undir_map[top] |= dir_to_dir_flag(i),
+            stk[stk_ptr++] = npos;
+    }
+    for (dir i = 0; i < 6; i++) {
+      dir d_flag;
+      if (dir_map[top] & (d_flag = dir_to_dir_flag(i)))
+        dir_map[top] &= ~d_flag, undir_map[top] |= d_flag,
+            stk[stk_ptr++] = cb_hpoint_add_dir(top, i);
+    }
   }
   free(dir_map);
   free(stk);
