@@ -9,9 +9,20 @@ typedef uint32_t u32;
 typedef uint8_t u8;
 typedef int8_t s8;
 
+// parameters
+u32 x_bits = 12;
+u32 y_bits = 12;
 u32 r_bits = 8;
 u32 g_bits = 8;
 u32 b_bits = 8;
+u32 seed = 0xDEADBEEF;
+
+// return number of unique x-coordinates
+u32 x_span() { return 1 << x_bits; }
+// return number of unique y-coordinates
+u32 y_span() { return 1 << y_bits; }
+// return number of unique pixel positions
+u32 pixels() { return x_span() * y_span(); }
 
 // return number of unique r-coordinates
 u32 r_span() { return 1 << r_bits; }
@@ -21,16 +32,6 @@ u32 g_span() { return 1 << g_bits; }
 u32 b_span() { return 1 << b_bits; }
 // return number of unique colors
 u32 colors() { return r_span() * g_span() * b_span(); }
-
-u32 x_bits = 12;
-u32 y_bits = 12;
-
-// return number of unique x-coordinates
-u32 x_span() { return 1 << x_bits; }
-// return number of unique y-coordinates
-u32 y_span() { return 1 << y_bits; }
-// return number of unique pixel positions
-u32 pixels() { return x_span() * y_span(); }
 
 // compose bitfield
 u32 bf_compress(u32 value, u32 base_index, u32 width) {
@@ -231,22 +232,22 @@ void edges_sort(edge *edges, u32 *weights, u32 from, u32 to, edge *edges_target,
 // union-find acceleration datastructure
 typedef struct dsu {
   node_id *parent;
-  u32 *size;
+  u32 *rank;
 } dsu;
 
 // initialize dsu
 void dsu_init(dsu *d, node_id max_node) {
   d->parent = malloc(sizeof(node_id) * max_node);
-  d->size = malloc(sizeof(u32) * max_node);
-  assert(d->parent && d->size);
+  d->rank = malloc(sizeof(u32) * max_node);
+  assert(d->parent && d->rank);
   for (node_id i = 0; i < max_node; i++)
-    d->parent[i] = i, d->size[i] = 1;
+    d->parent[i] = i, d->rank[i] = 1;
 }
 
 // destroy dsu
 void dsu_destroy(dsu *d) {
   free(d->parent);
-  free(d->size);
+  free(d->rank);
 }
 
 // find root of given node
@@ -287,14 +288,15 @@ node_id dsu_find(dsu *d, node_id node) {
 void dsu_root_union(dsu *d, node_id root_x, node_id root_y) {
   // for max efficiency we should never call this with root_x == root_y
   assert(root_x != root_y);
-  if (d->size[root_x] < d->size[root_y]) {
+  if (d->rank[root_x] < d->rank[root_y]) {
     // keep trees short by grafting larger trees onto smaller ones
     node_id temp = root_x;
     root_x = root_y;
     root_y = temp;
   }
   d->parent[root_y] = root_x;
-  d->size[root_x] += d->size[root_y];
+  if (d->rank[root_x] == d->rank[root_y])
+    d->rank[root_x] += 1;
 }
 
 // kruskal's implementation
@@ -566,40 +568,47 @@ void grayinate_2(dir_flag child_set, dir dir_out, dir *out_dirs,
 // given bitset of out-edges, and index of in-edge, compute a gray code that
 // visits all eight positions on the unit cube, and additionally the direction
 // for each of those positions.
-// Additionally, the gray code must start and end at given points on the cube.
+// Also, the gray code must start and end at given points on the cube.
 void grayinate_3(axis_flag start_point, axis_flag end_point, dir_flag child_set,
                  dir dir_out, dir *out_dirs, u8 *out_gray) {
   u8 gray[8] = {0, 1, 3, 2, 6, 7, 5, 4}, start_pc, i, j, k,
      orig_child_set = child_set;
   assert(child_set < (1 << 6));
+  // 1. Generate a gray code that visits all positions on the unit cube.
   if ((start_pc = popcount_3(start_point)) > popcount_3(end_point))
+    // Inverting the gray code will flip the popcounts in favor of start_point.
     gray3_invert(gray, 7);
   i = 1;
   while (popcount_3(gray[0]) != start_pc) {
+    // Invert bits until popcount equals that of start_pc.
     if ((gray[0] & i) == (gray[7] & i))
       gray3_invert(gray, i);
     i <<= 1;
   }
   for (i = 1; i < 4; i <<= 1) {
     for (j = i << 1; j < 8; j <<= 1) {
+      // Swap bits until the start point of the gray code matches the input
+      // start point.
       if (((gray[0] & i) != (start_point & i)) &&
           (gray[0] & j) != (start_point & j))
         gray3_swap(gray, i, j);
+      // Then, swap bits until the end point matches the input end point.
       else if (((gray[7] & i) != (end_point & i)) &&
                (gray[7] & j) != (end_point & j))
         gray3_swap(gray, i, j);
     }
   }
+  // 2. Figure out how to assign directions.
   u8 dirs[8] = {0, 0, 0, 0, 0, 0, 0, 0};
   for (i = 0; i < 8; i++) {
+    // Build initial direction vectors by diffing pairs of gray points.
     u8 a = gray[i], b = gray[(i + 1) & 7];
     u8 diff = a ^ b;
-    assert(popcount_3(diff) == 1);
     u8 sign = !(b & diff); // 0 = pos, 1 = neg
     dirs[i] = !!(diff & 1) * DIR_PX + !!(diff & 2) * DIR_PY +
               !!(diff & 4) * DIR_PZ + sign;
-    assert(dirs[i] < 6);
   }
+  // Build axis count and axis validity sets.
   u64 axis_count = 0, axis;
   u64 dir_axis_set[8] = {0, 0, 0, 0, 0, 0, 0, 0};
   for (i = 0; i < 8; i++) {
@@ -768,14 +777,54 @@ uint32_t triple32(uint32_t x) {
   return x;
 }
 
-u32 *make_edge_weights(u32 num_edges) {
+typedef struct {
+  uint64_t state;
+  uint64_t inc;
+} pcg32_random_t;
+
+uint32_t pcg32_random_r(pcg32_random_t *rng) {
+  uint64_t oldstate = rng->state;
+  // Advance internal state
+  rng->state = oldstate * 6364136223846793005ULL + (rng->inc | 1);
+  // Calculate output function (XSH RR), uses old state for max ILP
+  uint32_t xorshifted = ((oldstate >> 18u) ^ oldstate) >> 27u;
+  uint32_t rot = oldstate >> 59u;
+  return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
+}
+
+pcg32_random_t rng_state = {0xDEADBEEF, 1};
+
+uint32_t rng(void) { return pcg32_random_r(&rng_state); }
+
+typedef u32 (*weight_func)(u32);
+
+u32 *make_edge_weights(u32 num_edges, edge *edges, weight_func func) {
   u32 *out = malloc(sizeof(u32) * num_edges);
-  u32 rand = 5;
   assert(out);
   for (u32 i = 0; i < num_edges; i++) {
-    out[i] = (rand = triple32(rand));
+    out[i] = func(rng() & 1 ? edges[i].from : edges[i].to);
   }
   return out;
+}
+
+u32 rng_weight_func(u32 idx) { return rng(); }
+
+u32 center_weight_func(sq_hpoint idx) {
+  float x = sq_hpoint_x(idx), y = sq_hpoint_y(idx);
+  x = (float)x_span() / 2 - x, y = (float)y_span() / 2 - y;
+  float dist = (x * x + y * y) + rng() % (1 << 20);
+  return (u32)-1 - (u32)dist;
+}
+
+u32 circle_weight_func(sq_hpoint idx) {
+  float x = sq_hpoint_x(idx), y = sq_hpoint_y(idx);
+  x = ((float)x_span() / 2) - x, y = ((float)y_span() / 2) - y;
+  float dist = (x * x + y * y);
+  if (dist < 1000.0f * 1000.0f) {
+    return (rng() % 32) > 17;
+  } else {
+    return rng() + 10000;
+  }
 }
 
 #include <unistd.h>
@@ -785,9 +834,12 @@ void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
   FILE *f = fopen("out.pbm", "w");
   u32 *pix = malloc(sizeof(u32) * x_span() * y_span());
   u8 *out_f = malloc(sizeof(u8) * x_span() * y_span() * 3);
+  u32 max_bpp = r_bits > g_bits ? r_bits : g_bits;
+  max_bpp = b_bits > max_bpp ? b_bits : max_bpp;
+  max_bpp = 8;
   assert(pix && out_f);
   u32 out_f_ptr = 0;
-  fprintf(f, "P6\n%i %i\n255\n", x_span(), y_span());
+  fprintf(f, "P6\n%i %i\n%u\n", x_span(), y_span(), (1 << max_bpp) - 1);
   do {
     screen_idx = sq_point_add_dir(screen_idx, screen_dirs[screen_idx]);
     cube_idx = cb_point_add_dir(cube_idx, cube_dirs[cube_idx]);
@@ -797,9 +849,9 @@ void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
     u32 cube_idx = pix[i];
     u8 r = cb_point_r(cube_idx), g = cb_point_g(cube_idx),
        b = cb_point_b(cube_idx);
-    r = (r << (8 - r_bits));
-    g = (g << (8 - g_bits));
-    b = (b << (8 - b_bits));
+    r = (r << (max_bpp - r_bits));
+    g = (g << (max_bpp - g_bits));
+    b = (b << (max_bpp - b_bits));
     out_f[out_f_ptr++] = r;
     out_f[out_f_ptr++] = g;
     out_f[out_f_ptr++] = b;
@@ -814,14 +866,20 @@ int main(int argc, const char *const *argv) {
   u32 num_screen_edges, num_cube_edges;
   u32 num_screen_nodes = x_span() / 2 * y_span() / 2;
   u32 num_cube_nodes = r_span() / 2 * g_span() / 2 * b_span() / 2;
+  sq_hpoint screen_start =
+      sq_hpoint_make(rng() & (x_span() - 1), rng() & (y_span() - 1));
+  cb_hpoint cube_start = cb_hpoint_make(
+      rng() & (r_span() - 1), rng() & (g_span() - 1), rng() & (b_span() - 1));
 
   printf("making edges...\n");
   edge *screen_edges = sq_edges_make(x_span(), y_span(), &num_screen_edges);
   edge *cube_edges =
       make_cube_edges(r_span(), g_span(), b_span(), &num_cube_edges);
   printf("making edge weights...\n");
-  u32 *screen_edge_weights = make_edge_weights(num_screen_edges);
-  u32 *cube_edge_weights = make_edge_weights(num_cube_edges);
+  u32 *screen_edge_weights =
+      make_edge_weights(num_screen_edges, screen_edges, &rng_weight_func);
+  u32 *cube_edge_weights =
+      make_edge_weights(num_cube_edges, cube_edges, &rng_weight_func);
   printf("kruskinating...\n");
   screen_edges = kruskinate(num_screen_nodes, num_screen_edges, screen_edges,
                             screen_edge_weights);
@@ -831,10 +889,12 @@ int main(int argc, const char *const *argv) {
   u8 *screen_edge_dirs = map_square_edges(num_screen_nodes - 1, screen_edges);
   u8 *cube_edge_dirs = map_cube_edges(num_cube_nodes - 1, cube_edges);
   printf("reorienting edges...\n");
-  screen_edge_dirs = reorient_square_edges(screen_edge_dirs, 0);
-  cube_edge_dirs = reorient_cube_edges(cube_edge_dirs, 0);
+  screen_edge_dirs = reorient_square_edges(screen_edge_dirs, screen_start);
+  cube_edge_dirs = reorient_cube_edges(cube_edge_dirs, cube_start);
   printf("resolving edges...\n");
-  u8 *out_screen_dirs = resolve_edges_2(num_screen_nodes, screen_edge_dirs, 0);
-  u8 *out_cube_dirs = resolve_edges_3(num_cube_nodes, cube_edge_dirs, 0);
-  run_pic(out_screen_dirs, out_cube_dirs, 0, 0);
+  u8 *out_screen_dirs =
+      resolve_edges_2(num_screen_nodes, screen_edge_dirs, screen_start);
+  u8 *out_cube_dirs =
+      resolve_edges_3(num_cube_nodes, cube_edge_dirs, cube_start);
+  run_pic(out_screen_dirs, out_cube_dirs, screen_start, cube_start);
 }
