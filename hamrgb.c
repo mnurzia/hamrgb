@@ -1,3 +1,6 @@
+#define VERSION "0.0.1"
+
+#include "aparse/aparse.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,8 +13,8 @@ typedef uint8_t u8;
 typedef int8_t s8;
 
 // parameters
-u32 x_bits = 12;
-u32 y_bits = 12;
+u32 x_bits = 13;
+u32 y_bits = 11;
 u32 r_bits = 8;
 u32 g_bits = 8;
 u32 b_bits = 8;
@@ -816,19 +819,59 @@ pcg32_random_t rng_state = {0xDEADBEEF, 1};
 
 uint32_t rng(void) { return pcg32_random_r(&rng_state); }
 
-typedef u32 (*weight_func)(u32);
+typedef u32 (*weight_func)(edge *e);
 
 u32 *make_edge_weights(u32 num_edges, edge *edges, weight_func func) {
   u32 *out = malloc(sizeof(u32) * num_edges);
   assert(out);
   for (u32 i = 0; i < num_edges; i++) {
-    out[i] = func(rng() & 1 ? edges[i].from : edges[i].to);
+    out[i] = func(edges + i);
   }
   return out;
 }
 
-u32 rng_weight_func(u32 idx) { return rng(); }
+u32 rng_weight_func(edge *e) {
+  if (rng() & 1) {
+    u32 temp = e->from;
+    e->from = e->to;
+    e->to = temp;
+  }
+  return rng();
+}
 
+u32 quant_weight_func(edge *e) {
+  if (rng() & 1) {
+    u32 temp = e->from;
+    e->from = e->to;
+    e->to = temp;
+  }
+  u32 rv = rng();
+  if (rv & 1) {
+    return 1 << 31;
+  } else {
+    return rv;
+  }
+  return (rng() % 64) == 63;
+}
+
+u32 circle_weight_func(edge *e) {
+  if (rng() & 1) {
+    u32 temp = e->from;
+    e->from = e->to;
+    e->to = temp;
+  }
+  u32 idx = e->from;
+  float x = sq_hpoint_x(idx), y = sq_hpoint_y(idx);
+  x = ((float)x_span() / 2) - x, y = ((float)y_span() / 2) - y;
+  float dist = (x * x + y * y);
+  if (dist < 1000.0f * 1000.0f) {
+    return (rng() % 32) > 17;
+  } else {
+    return rng() + 10000;
+  }
+}
+
+#if 0
 u32 center_weight_func(sq_hpoint idx) {
   float x = sq_hpoint_x(idx), y = sq_hpoint_y(idx);
   x = (float)x_span() / 2 - x, y = (float)y_span() / 2 - y;
@@ -846,12 +889,19 @@ u32 circle_weight_func(sq_hpoint idx) {
     return rng() + 10000;
   }
 }
+#endif
 
 #include <unistd.h>
+int quiet = 0;
 
-void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
+void out(const char *text) {
+  if (!quiet)
+    fprintf(stderr, "%s", text);
+}
+
+void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx,
+             FILE *f) {
   u32 orig_cube_idx = cube_idx;
-  FILE *f = fopen("out.pbm", "w");
   u32 *pix = malloc(sizeof(u32) * x_span() * y_span());
   u8 *out_f = malloc(sizeof(u8) * x_span() * y_span() * 3);
   u32 max_bpp = r_bits > g_bits ? r_bits : g_bits;
@@ -882,7 +932,98 @@ void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx) {
   free(pix);
 }
 
+int is_pos_pow2(int v) {
+  // https://graphics.stanford.edu/~seander/bithacks.html#DetermineIfPowerOf2
+  return v > 0 && (v & (v - 1)) == 0;
+}
+
+u32 int_log2(int v) {
+  // https://graphics.stanford.edu/~seander/bithacks.html#IntegerLogObvious
+  u32 out = 0;
+  while (v >>= 1)
+    out++;
+  return out;
+}
+
 int main(int argc, const char *const *argv) {
+  int w = 4096, h = 4096, r = 256, g = 256, b = 256;
+  const char *out_pbm = NULL;
+  ap *parser = ap_init(argv[0]);
+  ap_opt(parser, 'x', "width");
+  ap_type_int(parser, &w);
+  ap_help(parser, "width of output image, must be a power of 2 (default 4096)");
+
+  ap_opt(parser, 'y', "height");
+  ap_type_int(parser, &h);
+  ap_help(parser,
+          "height of output image, must be a power of 2 (default 4096)");
+
+  ap_opt(parser, 'r', "red");
+  ap_type_int(parser, &r);
+  ap_help(parser,
+          "number of discrete red values, must be a power of 2 (default 256)");
+
+  ap_opt(parser, 'g', "green");
+  ap_type_int(parser, &g);
+  ap_help(
+      parser,
+      "number of discrete green values, must be a power of 2 (default 256)");
+
+  ap_opt(parser, 'b', "blue");
+  ap_type_int(parser, &b);
+  ap_help(parser,
+          "number of discrete blue values, must be a power of 2 (default 256)");
+
+  ap_pos(parser, "FILE");
+  ap_type_str(parser, &out_pbm);
+  ap_help(parser, "output .pbm file (use -- for stdout)");
+
+  ap_opt(parser, 'q', "quiet");
+  ap_type_flag(parser, &quiet);
+  ap_help(parser, "don't output diagnostic messages");
+
+  ap_opt(parser, 'h', "help");
+  ap_type_help(parser);
+
+  ap_opt(parser, 'v', "version");
+  ap_type_version(parser, "hamrgb " VERSION);
+
+  ap_description(parser, "build images with all possible colors and positions "
+                         "in respective hamiltonian cycles");
+  ap_epilog(parser,
+            "This program, given parameters about the dimensions of an image "
+            "and RGB cube, will find a hamiltonian cycle through the positions "
+            "of the output image and a hamiltonian cycle through the positions "
+            "of the RGB cube, and subsequently walk through the two at the "
+            "same time in order to create an aesthetically pleasing image.\n"
+            "Copyright (c)2023 Max Nurzia");
+
+  switch (ap_parse(parser, argc - 1, argv + 1)) {
+  case 0:
+    break;
+  case AP_ERR_EXIT:
+    exit(0);
+  default:
+    exit(1);
+  }
+
+  if (!is_pos_pow2(w) || !is_pos_pow2(h) || !is_pos_pow2(r) ||
+      !is_pos_pow2(g) || !is_pos_pow2(b))
+    exit(ap_error(
+        parser,
+        "--width, --height, --red, --green, and --blue must all reference "
+        "positive nonzero integer values that are multiples of 2"));
+  x_bits = int_log2(w);
+  y_bits = int_log2(h);
+  r_bits = int_log2(r);
+  g_bits = int_log2(g);
+  b_bits = int_log2(b);
+  if (x_bits + y_bits != r_bits + g_bits + b_bits)
+    exit(ap_error(parser, "number of pixels (--width * --height) must be equal "
+                          "to number of colors (--red * --green * --blue)"));
+
+  FILE *out_file = strcmp(out_pbm, "--") ? fopen(out_pbm, "w") : stdout;
+
   u32 num_screen_edges, num_cube_edges;
   u32 num_screen_nodes = x_span() / 2 * y_span() / 2;
   u32 num_cube_nodes = r_span() / 2 * g_span() / 2 * b_span() / 2;
@@ -891,30 +1032,31 @@ int main(int argc, const char *const *argv) {
   cb_hpoint cube_start = cb_hpoint_make(
       rng() & (r_span() - 1), rng() & (g_span() - 1), rng() & (b_span() - 1));
 
-  printf("making edges...\n");
+  out("making edges...\n");
   edge *screen_edges = sq_edges_make(x_span(), y_span(), &num_screen_edges);
   edge *cube_edges =
       make_cube_edges(r_span(), g_span(), b_span(), &num_cube_edges);
-  printf("making edge weights...\n");
+  out("making edge weights...\n");
   u32 *screen_edge_weights =
       make_edge_weights(num_screen_edges, screen_edges, &rng_weight_func);
   u32 *cube_edge_weights =
       make_edge_weights(num_cube_edges, cube_edges, &rng_weight_func);
-  printf("kruskinating...\n");
+  out("kruskinating...\n");
   screen_edges = kruskinate(num_screen_nodes, num_screen_edges, screen_edges,
                             screen_edge_weights);
   cube_edges =
       kruskinate(num_cube_nodes, num_cube_edges, cube_edges, cube_edge_weights);
-  printf("mapping edges...\n");
+  out("mapping edges...\n");
   u8 *screen_edge_dirs = map_square_edges(num_screen_nodes - 1, screen_edges);
   u8 *cube_edge_dirs = map_cube_edges(num_cube_nodes - 1, cube_edges);
-  printf("reorienting edges...\n");
+  out("reorienting edges...\n");
   screen_edge_dirs = reorient_square_edges(screen_edge_dirs, screen_start);
   cube_edge_dirs = reorient_cube_edges(cube_edge_dirs, cube_start);
-  printf("resolving edges...\n");
+  out("resolving edges...\n");
   u8 *out_screen_dirs =
       resolve_edges_2(num_screen_nodes, screen_edge_dirs, screen_start);
   u8 *out_cube_dirs =
       resolve_edges_3(num_cube_nodes, cube_edge_dirs, cube_start);
-  run_pic(out_screen_dirs, out_cube_dirs, screen_start, cube_start);
+  run_pic(out_screen_dirs, out_cube_dirs, screen_start, cube_start, out_file);
+  return 0;
 }

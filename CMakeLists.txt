@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.26.0)
-project(ham)
+project(hamrgb)
 
-add_executable(ham)
+add_executable(hamrgb)
 
-target_compile_options(ham PUBLIC -Wall -Werror -O3 --std=c99)
-target_link_options(ham PUBLIC)
-target_sources(ham PUBLIC ham2.c)
+target_compile_options(hamrgb PUBLIC -Wall -Werror --std=c99)
+target_link_options(hamrgb PUBLIC)
+target_sources(hamrgb PUBLIC hamrgb.c aparse/aparse.c)
