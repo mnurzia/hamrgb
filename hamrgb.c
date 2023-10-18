@@ -2,6 +2,7 @@
 
 #include "aparse/aparse.h"
 #include <assert.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -871,25 +872,27 @@ u32 circle_weight_func(edge *e) {
   }
 }
 
-#if 0
-u32 center_weight_func(sq_hpoint idx) {
-  float x = sq_hpoint_x(idx), y = sq_hpoint_y(idx);
-  x = (float)x_span() / 2 - x, y = (float)y_span() / 2 - y;
-  float dist = (x * x + y * y) + rng() % (1 << 20);
-  return (u32)-1 - (u32)dist;
-}
-
-u32 circle_weight_func(sq_hpoint idx) {
-  float x = sq_hpoint_x(idx), y = sq_hpoint_y(idx);
-  x = ((float)x_span() / 2) - x, y = ((float)y_span() / 2) - y;
-  float dist = (x * x + y * y);
-  if (dist < 1000.0f * 1000.0f) {
-    return (rng() % 32) > 17;
-  } else {
-    return rng() + 10000;
+u32 whirlpool_weight_func(edge *e) {
+  if (rng() & 1) {
+    u32 temp = e->from;
+    e->from = e->to;
+    e->to = temp;
   }
+  static const float shells = 8;
+  static const float swirls = 16;
+  static const float swirl_vel = 8;
+  float w = (float)x_span() / 2, h = (float)y_span() / 2;
+  float x = w - sq_hpoint_x(e->from), y = h - sq_hpoint_y(e->from);
+  float maxdim = fmaxf(w, h);
+  float dist = sqrtf(x * x + y * y) / sqrtf(maxdim * maxdim * 2);
+  float ang = fmodf(atan2f(y, x) + 2 * M_PI, 2 * M_PI);
+  float phase = dist + (1 / shells / 2) *
+                           cosf(ang * swirls + dist * M_PI * 2 * swirl_vel);
+  float bias =
+      powf((-cosf(phase * 2 * M_PI * shells) + 1) / 2, 4) * 0.999 + 0.01;
+  // yes, i know this is not how you are supposed to get random floats.
+  return (u32)((float)(rng()) * bias);
 }
-#endif
 
 #include <unistd.h>
 int quiet = 0;
@@ -899,12 +902,27 @@ void out(const char *text) {
     fprintf(stderr, "%s", text);
 }
 
+int check = 0;
+
+u8 *bmp_new(u32 num_elements) {
+  u8 *out = calloc((num_elements + 7) / 8, 1);
+  return out;
+}
+
+void bmp_set(u8 *bmp, u32 idx, int v) {
+  u8 mask = 1 << (idx & 7);
+  bmp[idx / 8] = (bmp[idx / 8] & ~mask) | (v * mask);
+}
+
+int bmp_get(u8 *bmp, u32 idx) { return !!(bmp[idx / 8] & (1 << (idx & 7))); }
+
 void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx,
              FILE *f) {
   u32 orig_cube_idx = cube_idx;
   u32 *pix = malloc(sizeof(u32) * x_span() * y_span());
   u8 *out_f = malloc(sizeof(u8) * x_span() * y_span() * 3);
   u32 max_bpp = r_bits > g_bits ? r_bits : g_bits;
+  u8 *check_bmp = check ? bmp_new(x_span() * y_span()) : NULL;
   max_bpp = b_bits > max_bpp ? b_bits : max_bpp;
   max_bpp = 8;
   assert(pix && out_f);
@@ -925,11 +943,20 @@ void run_pic(u8 *screen_dirs, u8 *cube_dirs, u32 screen_idx, u32 cube_idx,
     out_f[out_f_ptr++] = r;
     out_f[out_f_ptr++] = g;
     out_f[out_f_ptr++] = b;
+    if (check)
+      bmp_set(check_bmp, cube_idx, 1);
+  }
+  if (check) {
+    for (u32 i = 0; i < x_span() * y_span(); i++)
+      /* if this fails, we don't make all colors. */
+      if (!bmp_get(check_bmp, i))
+        out("rgb check failed");
   }
   fwrite(out_f, out_f_ptr, 1, f);
   fclose(f);
   free(out_f);
   free(pix);
+  free(check_bmp);
 }
 
 int is_pos_pow2(int v) {
@@ -946,7 +973,7 @@ u32 int_log2(int v) {
 }
 
 int main(int argc, const char *const *argv) {
-  int w = 4096, h = 4096, r = 256, g = 256, b = 256;
+  int w = 4096, h = 4096, r = 256, g = 256, b = 256, in_seed = 0;
   const char *out_pbm = NULL;
   ap *parser = ap_init(argv[0]);
   ap_opt(parser, 'x', "width");
@@ -981,6 +1008,14 @@ int main(int argc, const char *const *argv) {
   ap_opt(parser, 'q', "quiet");
   ap_type_flag(parser, &quiet);
   ap_help(parser, "don't output diagnostic messages");
+
+  ap_opt(parser, 's', "seed");
+  ap_type_int(parser, &in_seed);
+  ap_help(parser, "choose a seed for the random number generator (default 0)");
+
+  ap_opt(parser, 'c', "check");
+  ap_type_flag(parser, &check);
+  ap_help(parser, "ensure that all colors are present");
 
   ap_opt(parser, 'h', "help");
   ap_type_help(parser);
@@ -1023,6 +1058,8 @@ int main(int argc, const char *const *argv) {
                           "to number of colors (--red * --green * --blue)"));
 
   FILE *out_file = strcmp(out_pbm, "--") ? fopen(out_pbm, "w") : stdout;
+
+  rng_state.state = (u32)in_seed;
 
   u32 num_screen_edges, num_cube_edges;
   u32 num_screen_nodes = x_span() / 2 * y_span() / 2;
